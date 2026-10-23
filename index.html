@@ -9,7 +9,7 @@
   canvas{display:block;image-rendering:pixelated}
   .ui{position:fixed;color:#fff;font-family:ui-monospace,Consolas,monospace;pointer-events:none;white-space:pre}
   #intro{left:0;right:0;top:18px;text-align:center;font-size:12px;letter-spacing:.12em;opacity:0;transition:opacity 1.2s}
-  #bubble{transform:translate(-30%,-100%);opacity:0;transition:opacity .4s;image-rendering:pixelated}
+  #bubble{opacity:0;transition:opacity .4s;image-rendering:pixelated}
   #outro{left:0;right:0;bottom:9%;text-align:center;font-size:13px;line-height:2.2;letter-spacing:.3em;opacity:0;transition:opacity 3s;text-shadow:0 0 6px #000,0 0 14px #000,0 0 24px #000}
   #outro small{display:block;font-size:10px;letter-spacing:.2em;opacity:.5}
 </style>
@@ -1122,25 +1122,31 @@ function drawBubble(text) {
   const S = 2 / (devicePixelRatio || 1), ctx = bubble.getContext('2d');   // 1 пиксель бабла = 2 физических, как мелкий шаг растра
   const FONT = '13px "Times New Roman", Times, serif';
   ctx.font = FONT;
-  const tw = Math.ceil(ctx.measureText(text).width), w = tw + 22, h = 22, tail = 11, W = w + 8, H = h + tail + 5;
+  // каждый бабл свой: высота, надутость боков, наклон верха, место и изгиб хвостика
+  const rnd = (a, b) => a + Math.random() * (b - a);
+  const pad = rnd(9, 16), bulge = rnd(2, 7), tilt = rnd(-3, 3), tail = rnd(8, 15);
+  const tw = Math.ceil(ctx.measureText(text).width), w = tw + pad * 2, h = rnd(20, 28);
+  const M = 8, W = Math.ceil(w + M * 2), H = Math.ceil(h + tail + M * 2);
   bubble.width = W; bubble.height = H;
   bubble.style.width = W * S + 'px'; bubble.style.height = H * S + 'px';
-  const j = () => (Math.random() - .5) * 3.5;             // кривизна каждой точки
-  const x0 = 3, y0 = 2, x1 = x0 + w, y1 = y0 + h, tx = x0 + w * .28;
+  const j = () => (Math.random() - .5) * 4;
+  const x0 = M, y0 = M, x1 = x0 + w, y1 = y0 + h;
+  const tp = rnd(.18, .45), tx = x0 + w * tp, tdx = rnd(-9, 3), tw2 = rnd(4, 8);
+  bubble.style.transform = `translate(${-(tx + tdx) / W * 100}%, -100%)`;   // кончик хвоста — над корабликом
   ctx.beginPath();
-  ctx.moveTo(x0 + 4 + j(), y0 + j());
-  ctx.quadraticCurveTo(x0 + w * .5, y0 - 2 + j(), x1 - 3 + j(), y0 + 1 + j());
-  ctx.quadraticCurveTo(x1 + 2 + j(), y0 + h * .5, x1 - 1 + j(), y1 - 2 + j());
-  ctx.quadraticCurveTo(x0 + w * .6, y1 + 2 + j(), tx + 6, y1 + j() * .5);
-  ctx.lineTo(tx - 3 + j(), y1 + tail);                  // кривой хвостик вниз-влево
-  ctx.lineTo(tx - 2, y1 - .5);
-  ctx.quadraticCurveTo(x0 - 1 + j(), y1 + 1 + j(), x0 + 1 + j(), y0 + h * .55 + j());
-  ctx.quadraticCurveTo(x0 - 2 + j(), y0 + 2 + j(), x0 + 4 + j(), y0 + j());
+  ctx.moveTo(x0 + 4 + j(), y0 + tilt * .5 + j());
+  ctx.quadraticCurveTo(x0 + w * rnd(.35, .65), y0 - bulge + j(), x1 - 3 + j(), y0 - tilt * .5 + j());
+  ctx.quadraticCurveTo(x1 + bulge + j(), y0 + h * rnd(.35, .65), x1 - 2 + j(), y1 - 2 + j());
+  ctx.quadraticCurveTo(x0 + w * rnd(.55, .8), y1 + bulge * .7 + j(), tx + tw2, y1 + j() * .5);
+  ctx.quadraticCurveTo(tx + tw2 * .3, y1 + tail * .6, tx + tdx, y1 + tail);   // хвостик изогнутый, каждый раз по-своему
+  ctx.quadraticCurveTo(tx - 1, y1 + tail * .4, tx - 2, y1 - .5);
+  ctx.quadraticCurveTo(x0 - bulge * .6 + j(), y1 + 1 + j(), x0 + 1 + j(), y0 + h * rnd(.4, .65) + j());
+  ctx.quadraticCurveTo(x0 - bulge + j(), y0 + 2 + j(), x0 + 4 + j(), y0 + tilt * .5 + j());
   ctx.closePath();
   ctx.fillStyle = '#fff'; ctx.fill();
   ctx.fillStyle = '#000'; ctx.textBaseline = 'middle';
   ctx.font = FONT;
-  ctx.fillText(text, x0 + 11, y0 + h / 2 + 1);
+  ctx.fillText(text, x0 + pad, y0 + h / 2 + 1);
   const im = ctx.getImageData(0, 0, W, H), d = im.data;   // жёсткий порог: ни одного серого пикселя
   for (let i = 0; i < d.length; i += 4) {
     const on = d[i + 3] > 110, white = d[i] > 150;   // порог чёрного — тонкие штрихи и засечки
