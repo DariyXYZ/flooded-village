@@ -162,19 +162,21 @@ blockMat.onBeforeCompile = blackShadows;
 const windowMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
 // отражение в воде: серое, без контура, рисуется поверх воды, но под всем остальным; чуть дрожит
 const reflU = { uTime: { value: 0 } };
-const reflMat = new THREE.MeshBasicMaterial({ color: 0xffffff, side: THREE.DoubleSide, depthTest: false, depthWrite: false });
+const edgeCache = new Map();
+const edgesOf = g => { if (!edgeCache.has(g)) edgeCache.set(g, new THREE.EdgesGeometry(g, 25)); return edgeCache.get(g); };
+const reflMat = new THREE.LineBasicMaterial({ color: 0xffffff, depthTest: false, depthWrite: false });
 reflMat.onBeforeCompile = sh => {
   sh.uniforms.uTime = reflU.uTime;
   sh.vertexShader = 'uniform float uTime; varying vec3 vW; varying float vUp;\n' + sh.vertexShader.replace('#include <project_vertex>',
     'vec4 wq = modelMatrix * vec4(transformed, 1.); transformed.x += sin(wq.y*9. + uTime*2.2 + wq.z*1.3) * .03 * (-wq.y);\n' +
-    'vW = (modelMatrix * vec4(transformed, 1.)).xyz; vUp = normal.y;\n#include <project_vertex>');
+    'vW = (modelMatrix * vec4(transformed, 1.)).xyz; vUp = 0.;\n#include <project_vertex>');
   // тёмное, тающее с глубиной, порванное горизонтальной рябью; alpha .1 — как вода: плавный растр без контура
   sh.fragmentShader = 'uniform float uTime; varying vec3 vW; varying float vUp;\n' + sh.fragmentShader.replace('#include <opaque_fragment>', `
-    float l = vUp > .3 ? .0063 : vUp < -.3 ? .0014 : .0032;   // на экране ≈10 / 7 / 5 из 100 (растр поднимает гаммой 1/2.2)
+    float l = .11;                                             // линии: на экране ≈35 → пунктир растра
     float d = -vW.y;
     l *= 1. - .45 * smoothstep(.05, 1.3, d);
     float rip = fract(vW.y * 9. + sin(vW.x * 1.7 + vW.z * .9 + uTime * 1.2) * .45);
-    l *= mix(.45, 1., step(.32, rip));
+    l *= step(.3, rip);                                       // рябь рвёт линии
     gl_FragColor = vec4(vec3(l), .1);`);
 };
 // лавка: полосатая крыша (полосы поперёк ската в локальных координатах)
@@ -519,7 +521,7 @@ class Block {
     this.shop = !!s.shop;
     this.mesh = new THREE.Mesh(houseGeo(s.len), this.shop ? shopMat : blockMat);
     this.mesh.castShadow = this.mesh.receiveShadow = true;
-    this.refl = new THREE.Mesh(this.mesh.geometry, reflMat);   // отражение — тот же домик вверх ногами
+    this.refl = new THREE.LineSegments(edgesOf(this.mesh.geometry), reflMat);   // отражение — контуры домика вверх ногами
     this.refl.scale.y = -1;
     this.refl.renderOrder = -1;
     scene.add(this.refl);
@@ -1002,14 +1004,24 @@ function plantShore() {
     for (const p of pudU) d = Math.min(d, (Math.hypot((x - p.x) / p.z, (z - p.y) / p.w) - 1) * Math.min(p.z, p.w));
     return d;
   };
-  const CH = 10, DENS = 6;
+  // сначала места валунов — трава на них не растёт, только вокруг
+  const bushSpots = [];
+  for (let t = 0; t < 30000 && bushSpots.length < 260; t++) {
+    const x = rr(-115, 55), z = rr(-44, 44), sd = sdWater(x, z);
+    if (sd < 1.2 || sd > 16 || inPuddle(x, z, 1.4)) continue;
+    if (noise2(x * .18 + 9, z * .18 - 3) < .6 || R() > .5) continue;
+    const sc0 = rr(.4, .95);
+    bushSpots.push({ x, z, sc0, r: sc0 * 1.7 });
+  }
+  const onRock = (x, z) => bushSpots.some(b => (x - b.x) ** 2 + (z - b.z) ** 2 < b.r * b.r);
+  const CH = 10, DENS = 3.2;
   for (let cx = -115; cx < 55; cx += CH) for (let cz = -44; cz < 44; cz += CH) {
     const lists = new Map();
     for (let i = 0; i < CH * CH * DENS; i++) {
       const x = cx + R() * CH, z = cz + R() * CH, sd = sdWater(x, z);
       if (sd < .25 || sd > 22) continue;
       const pd = pudDist(x, z);
-      if (pd < .05) continue;
+      if (pd < .05 || onRock(x, z)) continue;
       const meadow = noise2(x * .11, z * .11);
       const dens = .08 + .92 * sstep(.3, .72, noise2(x * .07 + 3, z * .07 - 5)) * (.55 + .45 * noise2(x * .35, z * .35));
       if (R() > dens) continue;                              // где-то густые заросли, где-то редкие пучки
@@ -1018,7 +1030,12 @@ function plantShore() {
               : wet || sd < 3 || pd < 2 || (meadow > .62 && R() < .5) ? pick(geos.tall)
               : pick(geos.short);
       if (!lists.has(g)) lists.set(g, []);
-      place(lists.get(g), x, z, rr(.8, 1.25));
+      const n = 2 + Math.floor(R() * 6 * dens), cr = rr(.15, .45);   // куртинка: несколько пучков тесно вместе
+      for (let k = 0; k < n; k++) {
+        const a = R() * 6.28, d = cr * Math.sqrt(R()), px = x + Math.cos(a) * d, pz = z + Math.sin(a) * d;
+        if (onRock(px, pz) || sdWater(px, pz) < .25 || pudDist(px, pz) < .05) continue;
+        place(lists.get(g), px, pz, rr(.75, 1.25));
+      }
     }
     for (const [g, list] of lists) {
       const im = new THREE.InstancedMesh(g, grassMat, list.length);
@@ -1056,17 +1073,12 @@ function plantShore() {
   // кусты — купами по шуму
   const bushGeos = [bushGeo(), bushGeo(), bushGeo(), bushGeo()];
   const bb = bushGeos.map(() => []), aroundGrass = [];
-  for (let t = 0, n = 0; t < 30000 && n < 260; t++) {
-    const x = rr(-115, 55), z = rr(-44, 44), sd = sdWater(x, z);
-    if (sd < 1.2 || sd > 16 || inPuddle(x, z, 1.4)) continue;
-    if (noise2(x * .18 + 9, z * .18 - 3) < .6 || R() > .5) continue;
-    const sc0 = rr(.4, .95);
+  for (const { x, z, sc0, r } of bushSpots) {
     place(bb[Math.floor(R() * bb.length)], x, z, sc0);
-    for (let j = 0; j < 14; j++) {                   // высокая трава обступает валун
-      const a = R() * 6.28, d = sc0 * rr(.7, 1.5);
+    for (let j = 0; j < 16; j++) {                   // высокая трава обступает валун — по краю, не на нём
+      const a = R() * 6.28, d = r * rr(1, 1.35);
       place(aroundGrass, x + Math.cos(a) * d, z + Math.sin(a) * d, rr(.8, 1.2));
     }
-    n++;
   }
   const ag = new THREE.InstancedMesh(geos.tall[0], grassMat, aroundGrass.length);
   aroundGrass.forEach((mm, i) => ag.setMatrixAt(i, mm));
