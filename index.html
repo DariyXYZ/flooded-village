@@ -245,7 +245,6 @@ const waterMat = new THREE.ShaderMaterial({
         }
         pd += (vnoise(vP*1.6) - .5)*.5 + (g2 - .5)*.12;     // рваный край лужи
         if(pd < 0.) v = 0.;
-        v = max(v, ring(pd, .06, .02) * .55 * smoothstep(.15, .45, g2 + .1));   // пунктирная кромка лужи
         v *= smoothstep(.15, .9, sw);
         v = max(v, ring(sw, 0., .018) * .5);   // тонкая кромка берега
         gl_FragColor = vec4(vec3(v), 0.);
@@ -319,8 +318,7 @@ const waterMat = new THREE.ShaderMaterial({
         float pn = vnoise(vP*.15) * .7 + vnoise(vP*.5 + 7.) * .3;
         float t = mix(-.05, .62, uDrain);
         float silt = mix(.00007, .0006, pow(smoothstep(.2, .85, vnoise(vP*.3) * .55 + vnoise(vP*1.1 + 7.) * .3 + vnoise(vP*3.4 - 2.) * .15), 1.4));   // дно: та же текстура, что у земли вокруг
-        v = pn > t ? mix(silt * uDrain, v, smoothstep(t, t + .06, pn)) : silt * uDrain;
-        v = max(v, ring(pn, t, .006) * .3 * smoothstep(0., .1, uDrain));
+        v = pn > t ? mix(silt * uDrain, 0., smoothstep(t, t + .04, pn)) : silt * uDrain;   // лужи — просто чёрные, без кругов и обводок
       }
       gl_FragColor = vec4(vec3(v), 0.);   // alpha 0 = вода
     }`
