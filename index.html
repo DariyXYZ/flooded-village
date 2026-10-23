@@ -1182,7 +1182,7 @@ function drawBubble(text) {
   ctx.fillText(text, x0 + pad, y0 + h / 2 + 1);
   const im = ctx.getImageData(0, 0, W, H), d = im.data;   // жёсткий порог: ни одного серого пикселя
   for (let i = 0; i < d.length; i += 4) {
-    const on = d[i + 3] > 110, white = d[i] > 150;   // порог чёрного — тонкие штрихи и засечки
+    const on = d[i + 3] > 110, white = d[i] > 225;   // любой след чернил — чёрный пиксель, тонкие штрихи не теряются; порог чёрного — тонкие штрихи и засечки
     d[i] = d[i + 1] = d[i + 2] = on && white ? 255 : 0; d[i + 3] = on ? 255 : 0;
   }
   ctx.putImageData(im, 0, 0);
