@@ -164,7 +164,14 @@ const windowMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
 const reflU = { uTime: { value: 0 } };
 const edgeCache = new Map();
 const edgesOf = g => { if (!edgeCache.has(g)) edgeCache.set(g, new THREE.EdgesGeometry(g, 25)); return edgeCache.get(g); };
-const reflMat = new THREE.LineBasicMaterial({ color: 0xffffff, depthTest: false, depthWrite: false });
+const reflMat = new THREE.LineBasicMaterial({ color: 0xffffff, depthWrite: false });
+// маска для отражения: пишет только глубину (чуть отодвинута), чтобы рисовались лишь видимые рёбра
+const REFL_WOBBLE = 'vec4 wq = modelMatrix * vec4(transformed, 1.); transformed.x += sin(wq.y*9. + uTime*2.2 + wq.z*1.3) * .03 * (-wq.y);\n';
+const reflMaskMat = new THREE.MeshBasicMaterial({ colorWrite: false, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 2 });
+reflMaskMat.onBeforeCompile = sh => {
+  sh.uniforms.uTime = reflU.uTime;
+  sh.vertexShader = 'uniform float uTime;\n' + sh.vertexShader.replace('#include <project_vertex>', REFL_WOBBLE + '#include <project_vertex>');
+};
 reflMat.onBeforeCompile = sh => {
   sh.uniforms.uTime = reflU.uTime;
   sh.vertexShader = 'uniform float uTime; varying vec3 vW; varying float vUp;\n' + sh.vertexShader.replace('#include <project_vertex>',
@@ -318,7 +325,8 @@ const waterMat = new THREE.ShaderMaterial({
 });
 const water = new THREE.Mesh(new THREE.PlaneGeometry(600, 600), waterMat);
 water.rotation.x = -Math.PI / 2;
-water.renderOrder = -2;                     // сначала вода, потом отражения, потом всё остальное
+water.renderOrder = -2;
+waterMat.depthWrite = false;                // вода не пишет глубину — под ней работает маска отражений                     // сначала вода, потом отражения, потом всё остальное
 scene.add(water);
 
 // круги вокруг брёвен — маленькие декали, смешиваются через max
@@ -524,7 +532,10 @@ class Block {
     this.refl = new THREE.LineSegments(edgesOf(this.mesh.geometry), reflMat);   // отражение — контуры домика вверх ногами
     this.refl.scale.y = -1;
     this.refl.renderOrder = -1;
-    scene.add(this.refl);
+    this.reflMask = new THREE.Mesh(this.mesh.geometry, reflMaskMat);   // невидимый объём: прячет задние рёбра
+    this.reflMask.scale.y = -1;
+    this.reflMask.renderOrder = -1.5;
+    scene.add(this.refl, this.reflMask);
     this.baseY = -s.sink * 0.15;          // почти не тонут, лишь касаются воды
     this.mesh.add(new THREE.Mesh(windowGeo(s.len, s.shop ? 1 : Math.floor(R() * WIN_TYPES)), windowMat));
     this.g.add(this.mesh);
@@ -584,9 +595,10 @@ class Block {
     this.mesh.rotation.x = Math.sin(time * 0.7 + this.phase) * 0.006 * (1 - drain) + (this.phase - 3.14) * .012 * drain;
     this.refl.position.set(this.x, -this.g.position.y, this.z);
     this.refl.rotation.set(-this.mesh.rotation.x, this.yaw, 0);
-    this.refl.visible = drain < .25;
+    this.refl.visible = this.reflMask.visible = drain < .25;
+    this.reflMask.position.copy(this.refl.position); this.reflMask.rotation.copy(this.refl.rotation);
   }
-  dispose() { scene.remove(this.g, this.refl); }
+  dispose() { scene.remove(this.g, this.refl, this.reflMask); }
 }
 
 // ближайшие точки двух 2D-отрезков
