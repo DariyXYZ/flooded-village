@@ -171,7 +171,7 @@ reflMat.onBeforeCompile = sh => {
     'vW = (modelMatrix * vec4(transformed, 1.)).xyz; vUp = normal.y;\n#include <project_vertex>');
   // тёмное, тающее с глубиной, порванное горизонтальной рябью; alpha .1 — как вода: плавный растр без контура
   sh.fragmentShader = 'uniform float uTime; varying vec3 vW; varying float vUp;\n' + sh.fragmentShader.replace('#include <opaque_fragment>', `
-    float l = vUp > .3 ? .13 : vUp < -.3 ? .03 : .065;
+    float l = vUp > .3 ? .07 : vUp < -.3 ? .015 : .035;   // темнее
     float d = -vW.y;
     l *= 1. - .7 * smoothstep(.05, 1.3, d);
     float rip = fract(vW.y * 9. + sin(vW.x * 1.7 + vW.z * .9 + uTime * 1.2) * .45);
@@ -227,7 +227,7 @@ const waterMat = new THREE.ShaderMaterial({
       // суша: болотистая почва шумом — мелкое зерно, пятна мха, чёрные лужи; чёткая кромка берега
       if(sw > 0.){
         float g1 = vnoise(vP*1.3), g2 = vnoise(vP*5.1 + 3.), g3 = vnoise(vP*14. - 7.);
-        float v = 0.;                                      // земля чёрная: мелкое зерно мерцало в растре при движении камеры
+        float v = .005;                                    // земля — еле заметный тон, ровный (зерно мерцало)
         float pd = 1e3;
         for(int i=0;i<PUD;i++){
           vec2 q = (vP - uPud[i].xy) / uPud[i].zw;
@@ -448,37 +448,46 @@ function houseGeo(len) {
   return g;
 }
 
-// окна: длинные ленты сёдзи по обеим длинным стенам + пара панелей на торцах
+// окна — несколько типов, каждый дом берёт свой: ленты сёдзи, редкие квадратные, высокие створки,
+// узкая щель под крышей, глухая стена с одной стороны
+const WIN_TYPES = 5;
 const winCache = new Map();
-function windowGeo(len) {
-  const key = len.toFixed(2);
+function windowGeo(len, type) {
+  const key = len.toFixed(2) + ':' + type;
   if (winCache.has(key)) return winCache.get(key);
-  // панели с тонкими перемычками, группами по 4, между группами — простенок
-  const pw = 0.26, gap = 0.05, post = 0.3, wh = 0.24, off = HALF_W + 0.006, margin = 0.25;
-  const ys = len > TIER2 ? [WALL * .4, WALL * 1.14] : [WALL * .52];   // у двухэтажных — две ленты
-  const unit = 4 * pw + 3 * gap;
-  const xs = [];
-  const groups = Math.floor((len - 2 * margin + post) / (unit + post));
-  if (groups > 0) {
-    const total = groups * unit + (groups - 1) * post;
-    for (let g = 0; g < groups; g++) for (let i = 0; i < 4; i++)
-      xs.push(-total / 2 + g * (unit + post) + i * (pw + gap) + pw / 2);
-  } else {
-    const n = Math.max(1, Math.floor((len - 2 * margin + gap) / (pw + gap)));
-    const total = n * pw + (n - 1) * gap;
+  const off = HALF_W + 0.006, margin = 0.25, parts = [];
+  const box = (x, y, z, w, h, side) => {
+    const b = side ? new THREE.BoxGeometry(0.01, h, w) : new THREE.BoxGeometry(w, h, 0.01);
+    b.translate(x, y, z); parts.push(b);
+  };
+  const row = (pw, gap, groupN, post) => {              // равномерный ряд панелей, по желанию — группами
+    const xs = [];
+    if (groupN) {
+      const unit = groupN * pw + (groupN - 1) * gap, groups = Math.floor((len - 2 * margin + post) / (unit + post));
+      if (groups > 0) {
+        const total = groups * unit + (groups - 1) * post;
+        for (let g = 0; g < groups; g++) for (let i = 0; i < groupN; i++) xs.push(-total / 2 + g * (unit + post) + i * (pw + gap) + pw / 2);
+        return xs;
+      }
+    }
+    const n = Math.max(1, Math.floor((len - 2 * margin + gap) / (pw + gap))), total = n * pw + (n - 1) * gap;
     for (let i = 0; i < n; i++) xs.push(-total / 2 + i * (pw + gap) + pw / 2);
+    return xs;
+  };
+  const sides = type === 4 ? [off] : [-off, off];
+  if (type === 0 || type === 4) {                       // ленты сёдзи группами по 4
+    for (const x of row(.26, .05, 4, .3)) for (const z of sides) box(x, WALL * .52, z, .26, .24);
+  } else if (type === 1) {                              // редкие квадратные окна
+    for (const x of row(.22, .55)) for (const z of sides) box(x, WALL * .55, z, .22, .22);
+  } else if (type === 2) {                              // высокие створки до пола
+    for (const x of row(.18, .32, 2, .7)) for (const z of sides) box(x, WALL * .42, z, .18, .5);
+  } else {                                              // узкая щель под самой крышей
+    for (const x of row(.5, .08)) for (const z of sides) box(x, WALL * .82, z, .5, .08);
   }
-  const parts = [];
-  for (const y of ys) for (const x of xs) for (const z of [-off, off]) {
-    const b = new THREE.BoxGeometry(pw, wh, 0.01);
-    b.translate(x, y, z);
-    parts.push(b);
-  }
-  for (const x of [-len / 2 - 0.006, len / 2 + 0.006]) for (const z of [-0.14, 0.14]) {
-    const b = new THREE.BoxGeometry(0.01, wh, pw * 0.9);
-    b.translate(x, ys[0], z);
-    parts.push(b);
-  }
+  const endY = type === 3 ? WALL * .82 : WALL * .52;      // торцы: пара панелей или одна
+  for (const x of [-len / 2 - 0.006, len / 2 + 0.006])
+    if (type === 1) box(x, endY, 0, .22, .22, true);
+    else for (const z of [-0.14, 0.14]) box(x, endY, z, .23, type === 3 ? .08 : .24, true);
   const g = mergeGeometries(parts);
   winCache.set(key, g);
   return g;
@@ -512,7 +521,7 @@ class Block {
     this.refl.renderOrder = -1;
     scene.add(this.refl);
     this.baseY = -s.sink * 0.15;          // почти не тонут, лишь касаются воды
-    this.mesh.add(new THREE.Mesh(windowGeo(s.len), windowMat));
+    this.mesh.add(new THREE.Mesh(windowGeo(s.len, s.shop ? 1 : Math.floor(R() * WIN_TYPES)), windowMat));
     this.g.add(this.mesh);
     scene.add(this.g);
     this.sync();
@@ -990,7 +999,7 @@ function plantShore() {
     for (const p of pudU) d = Math.min(d, (Math.hypot((x - p.x) / p.z, (z - p.y) / p.w) - 1) * Math.min(p.z, p.w));
     return d;
   };
-  const CH = 10, DENS = 3.5;
+  const CH = 10, DENS = 6;
   for (let cx = -115; cx < 55; cx += CH) for (let cz = -44; cz < 44; cz += CH) {
     const lists = new Map();
     for (let i = 0; i < CH * CH * DENS; i++) {
@@ -999,7 +1008,8 @@ function plantShore() {
       const pd = pudDist(x, z);
       if (pd < .05) continue;
       const meadow = noise2(x * .11, z * .11);
-      if (R() > .72 + .28 * meadow) continue;               // лёгкая неравномерность, без проплешин
+      const dens = .08 + .92 * sstep(.3, .72, noise2(x * .07 + 3, z * .07 - 5)) * (.55 + .45 * noise2(x * .35, z * .35));
+      if (R() > dens) continue;                              // где-то густые заросли, где-то редкие пучки
       const wet = sd < 1.6 || pd < .9;                      // у воды и у луж — тростник и высокая
       const g = wet && R() < .55 ? pick(geos.reed)
               : wet || sd < 3 || pd < 2 || (meadow > .62 && R() < .5) ? pick(geos.tall)
