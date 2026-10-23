@@ -305,7 +305,9 @@ const waterMat = new THREE.ShaderMaterial({
         float lane = psi/sp, id = floor(lane), g = abs(fract(lane) - .5)*sp;
         float vel = .25 + 1.1*(1. - pow(clamp(abs(vP.y)/hw, 0., 1.), 2.));
         float along = vP.x*.55 - uTime*vel*1.3 + hash(vec2(id, 3.))*20.;
-        float dash = smoothstep(.56, .78, vnoise(vec2(along, id*3.1 + wake*4.)));
+        // за дамбой каждая струя гаснет на своей дистанции: штрихи редеют и бледнеют градиентом
+        float lf = 1. - smoothstep(${DAM_X}. + .5, ${DAM_X}. + 3. + hash(vec2(id, 7.)) * 12., vP.x);
+        float dash = smoothstep(mix(.82, .56, lf), .86, vnoise(vec2(along, id*3.1 + wake*4.))) * lf;
         float thin = .008 + .006*vnoise(vec2(along*2., id));
         float acc = exp(-pow(g/thin, 2.)) * dash * (1. - wake*.6);
         c = max(c, acc * .6 * hide * fade);
