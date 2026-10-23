@@ -170,11 +170,11 @@ reflMat.onBeforeCompile = sh => {
     'vW = (modelMatrix * vec4(transformed, 1.)).xyz; vUp = normal.y;\n#include <project_vertex>');
   // тёмное, тающее с глубиной, порванное горизонтальной рябью; alpha .1 — как вода: плавный растр без контура
   sh.fragmentShader = 'uniform float uTime; varying vec3 vW; varying float vUp;\n' + sh.fragmentShader.replace('#include <opaque_fragment>', `
-    float l = vUp > .3 ? .07 : vUp < -.3 ? .015 : .035;   // темнее
+    float l = vUp > .3 ? .0063 : vUp < -.3 ? .0014 : .0032;   // на экране ≈10 / 7 / 5 из 100 (растр поднимает гаммой 1/2.2)
     float d = -vW.y;
-    l *= 1. - .7 * smoothstep(.05, 1.3, d);
+    l *= 1. - .45 * smoothstep(.05, 1.3, d);
     float rip = fract(vW.y * 9. + sin(vW.x * 1.7 + vW.z * .9 + uTime * 1.2) * .45);
-    l *= mix(.15, 1., step(.32, rip));
+    l *= mix(.45, 1., step(.32, rip));
     gl_FragColor = vec4(vec3(l), .1);`);
 };
 // лавка: полосатая крыша (полосы поперёк ската в локальных координатах)
@@ -228,7 +228,7 @@ const waterMat = new THREE.ShaderMaterial({
         float g1 = vnoise(vP*1.3), g2 = vnoise(vP*5.1 + 3.), g3 = vnoise(vP*14. - 7.);
         // земля: редкие полупрозрачные крапины, привязаны к миру и крупнее ячейки растра — не мерцают
         vec2 gc = floor(vP / .3), gf = fract(vP / .3) - .5 + (vec2(hash(gc + 3.), hash(gc + 9.)) - .5) * .6;
-        float v = hash(gc) > .965 && length(gf) < .17 ? .22 : 0.;
+        float v = hash(gc) > .965 && length(gf) < .17 ? .22 : .0014;   // заливка земли ≈5 из 100
         float pd = 1e3;
         for(int i=0;i<PUD;i++){
           vec2 q = (vP - uPud[i].xy) / uPud[i].zw;
@@ -1122,26 +1122,33 @@ function drawBubble(text) {
   const S = 2 / (devicePixelRatio || 1), ctx = bubble.getContext('2d');   // 1 пиксель бабла = 2 физических, как мелкий шаг растра
   const FONT = '13px "Times New Roman", Times, serif';
   ctx.font = FONT;
-  // каждый бабл свой: высота, надутость боков, наклон верха, место и изгиб хвостика
+  // форма — мягкая «подушка» (суперэллипс) с плавной кривизной по шуму: без изломов, но каждый раз своя
   const rnd = (a, b) => a + Math.random() * (b - a);
-  const pad = rnd(9, 16), bulge = rnd(2, 7), tilt = rnd(-3, 3), tail = rnd(8, 15);
-  const tw = Math.ceil(ctx.measureText(text).width), w = tw + pad * 2, h = rnd(20, 28);
-  const M = 8, W = Math.ceil(w + M * 2), H = Math.ceil(h + tail + M * 2);
+  const pad = rnd(14, 19), tail = rnd(9, 14);
+  const tw = Math.ceil(ctx.measureText(text).width), w = tw + pad * 2, h = rnd(24, 30);
+  const M = 7, W = Math.ceil(w + M * 2), H = Math.ceil(h + tail + M * 2);
   bubble.width = W; bubble.height = H;
   bubble.style.width = W * S + 'px'; bubble.style.height = H * S + 'px';
-  const j = () => (Math.random() - .5) * 4;
-  const x0 = M, y0 = M, x1 = x0 + w, y1 = y0 + h;
-  const tp = rnd(.18, .45), tx = x0 + w * tp, tdx = rnd(-9, 3), tw2 = rnd(4, 8);
+  const x0 = M, y0 = M, cx = x0 + w / 2, cy = y0 + h / 2, a = w / 2, b = h / 2;
+  const n = rnd(3, 5);                                   // насколько «квадратная» подушка
+  const p1 = rnd(0, 6.28), p2 = rnd(0, 6.28), k1 = rnd(.5, 1.2), k2 = rnd(.2, .7), sk = rnd(-.025, .025);
+  ctx.beginPath();
+  for (let i = 0; i <= 96; i++) {
+    const t = i / 96 * Math.PI * 2, c = Math.cos(t), s = Math.sin(t);
+    const r = 1 + (Math.sin(t * 2 + p1) * k1 + Math.sin(t * 3 + p2) * k2) / Math.min(a, b) * .9;
+    const x = cx + Math.sign(c) * Math.pow(Math.abs(c), 2 / n) * a * r;
+    const y = cy + Math.sign(s) * Math.pow(Math.abs(s), 2 / n) * b * r + (x - cx) * sk;
+    i ? ctx.lineTo(x, y) : ctx.moveTo(x, y);
+  }
+  ctx.closePath();
+  ctx.fillStyle = '#fff'; ctx.fill();
+  // хвостик — отдельный плавный клин, растёт из нижнего края
+  const tx = x0 + w * rnd(.22, .42), base = y0 + h - 3, tdx = rnd(-8, -2), tw2 = rnd(5, 8), bend = rnd(-3, 3);
   bubble.style.transform = `translate(${-(tx + tdx) / W * 100}%, -100%)`;   // кончик хвоста — над корабликом
   ctx.beginPath();
-  ctx.moveTo(x0 + 4 + j(), y0 + tilt * .5 + j());
-  ctx.quadraticCurveTo(x0 + w * rnd(.35, .65), y0 - bulge + j(), x1 - 3 + j(), y0 - tilt * .5 + j());
-  ctx.quadraticCurveTo(x1 + bulge + j(), y0 + h * rnd(.35, .65), x1 - 2 + j(), y1 - 2 + j());
-  ctx.quadraticCurveTo(x0 + w * rnd(.55, .8), y1 + bulge * .7 + j(), tx + tw2, y1 + j() * .5);
-  ctx.quadraticCurveTo(tx + tw2 * .3, y1 + tail * .6, tx + tdx, y1 + tail);   // хвостик изогнутый, каждый раз по-своему
-  ctx.quadraticCurveTo(tx - 1, y1 + tail * .4, tx - 2, y1 - .5);
-  ctx.quadraticCurveTo(x0 - bulge * .6 + j(), y1 + 1 + j(), x0 + 1 + j(), y0 + h * rnd(.4, .65) + j());
-  ctx.quadraticCurveTo(x0 - bulge + j(), y0 + 2 + j(), x0 + 4 + j(), y0 + tilt * .5 + j());
+  ctx.moveTo(tx - 1, base);
+  ctx.quadraticCurveTo(tx + tdx * .2 + bend, base + tail * .55, tx + tdx, base + tail);
+  ctx.quadraticCurveTo(tx + tw2 * .6 + bend, base + tail * .45, tx + tw2, base);
   ctx.closePath();
   ctx.fillStyle = '#fff'; ctx.fill();
   ctx.fillStyle = '#000'; ctx.textBaseline = 'middle';
