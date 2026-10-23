@@ -313,15 +313,15 @@ const waterMat = new THREE.ShaderMaterial({
         c = max(c, acc * .6 * hide * fade);
       }
       float v = max(c*0.42, wave*0.45);
+      v = v < .012 ? 0. : v;              // гамма растра вытягивает даже еле заметное — отсекаем хвосты
       // дамба закрыта: ниже дамбы вода уходит, остаются лужи с тонкой кромкой
       if(uDrain > 0. && vP.x > ${DAM_X}. + 1.){
         float pn = vnoise(vP*.15) * .7 + vnoise(vP*.5 + 7.) * .3;
         float t = mix(-.05, .62, uDrain);
-        float silt = .6 * mix(.00007, .0006, pow(smoothstep(.2, .85, vnoise(vP*.3) * .55 + vnoise(vP*1.1 + 7.) * .3 + vnoise(vP*3.4 - 2.) * .15), 1.4));   // мокрая глина: как земля вокруг, но темнее
+        float silt = mix(.00007, .0006, pow(smoothstep(.2, .85, vnoise(vP*.3) * .55 + vnoise(vP*1.1 + 7.) * .3 + vnoise(vP*3.4 - 2.) * .15), 1.4));   // дно: та же текстура, что у земли вокруг
         v = pn > t ? mix(silt * uDrain, v, smoothstep(t, t + .06, pn)) : silt * uDrain;
         v = max(v, ring(pn, t, .006) * .3 * smoothstep(0., .1, uDrain));
       }
-      v = v < .012 ? 0. : v;              // гамма растра вытягивает даже еле заметное — отсекаем хвосты
       gl_FragColor = vec4(vec3(v), 0.);   // alpha 0 = вода
     }`
 });
@@ -1395,10 +1395,10 @@ function layBed() {
   const kinds = [stick, noisyStone(1, .35, 2), noisyStone(1, .4, 1), noisyStone(1, .3, 2)];
   const lists = kinds.map(() => []);
   const m = new THREE.Matrix4(), q = new THREE.Quaternion(), v = new THREE.Vector3(), sc = new THREE.Vector3();
-  for (let t = 0, n = 0; t < 20000 && n < 900; t++) {
+  for (let t = 0, n = 0; t < 20000 && n < 380; t++) {
     const x = rr(DAM_X + 2, RX + 2), z = rr(-RZ - 2, RZ + 2);
     if (sdWater(x, z) > -.4 || !freeSpot(x, z, .3) && sdWater(x, z) < -1.2) continue;
-    const k = R() < .008 ? 0 : 1 + Math.floor(R() * 3), s = k ? rr(.06, .24) : rr(.4, 1.2);   // палок — пара штук
+    const k = R() < .1 ? 0 : 1 + Math.floor(R() * 3), s = k ? rr(.06, .24) : rr(.4, 1.2);   // немного палок
     q.setFromEuler(new THREE.Euler(0, R() * 6.28, k ? rr(-.4, .4) : rr(-.1, .1)));
     lists[k].push({ m: m.compose(v.set(x, k ? -s * .25 : .02, z), q, k ? sc.set(s, s * .6, s) : sc.set(s, 1, 1)).clone(), dry: bedDry(x, z) });
     n++;
