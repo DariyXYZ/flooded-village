@@ -9,8 +9,7 @@
   canvas{display:block;image-rendering:pixelated}
   .ui{position:fixed;color:#fff;font-family:ui-monospace,Consolas,monospace;pointer-events:none;white-space:pre}
   #intro{left:0;right:0;top:18px;text-align:center;font-size:12px;letter-spacing:.12em;opacity:0;transition:opacity 1.2s}
-  #bubble{background:#fff;color:#000;font-size:12px;line-height:1.45;padding:7px 11px;white-space:normal;max-width:220px;transform:translate(-50%,-100%);opacity:0;transition:opacity .5s}
-  #bubble:after{content:'';position:absolute;left:50%;bottom:-7px;margin-left:-6px;border:6px solid transparent;border-bottom:0;border-top-color:#fff}
+  #bubble{transform:translate(-30%,-100%);opacity:0;transition:opacity .4s;image-rendering:pixelated}
   #outro{left:0;right:0;bottom:9%;text-align:center;font-size:13px;line-height:2.2;letter-spacing:.3em;opacity:0;transition:opacity 3s;text-shadow:0 0 6px #000,0 0 14px #000,0 0 24px #000}
   #outro small{display:block;font-size:10px;letter-spacing:.2em;opacity:.5}
 </style>
@@ -22,7 +21,7 @@
 </script>
 </head>
 <body>
-<div id="bubble" class="ui"></div>
+<canvas id="bubble" class="ui"></canvas>
 <div id="outro" class="ui">the water is gone · the village rests<small>R — another village</small></div>
 <script type="module">
 import * as THREE from 'three';
@@ -227,7 +226,9 @@ const waterMat = new THREE.ShaderMaterial({
       // суша: болотистая почва шумом — мелкое зерно, пятна мха, чёрные лужи; чёткая кромка берега
       if(sw > 0.){
         float g1 = vnoise(vP*1.3), g2 = vnoise(vP*5.1 + 3.), g3 = vnoise(vP*14. - 7.);
-        float v = .005;                                    // земля — еле заметный тон, ровный (зерно мерцало)
+        // земля: редкие полупрозрачные крапины, привязаны к миру и крупнее ячейки растра — не мерцают
+        vec2 gc = floor(vP / .3), gf = fract(vP / .3) - .5 + (vec2(hash(gc + 3.), hash(gc + 9.)) - .5) * .6;
+        float v = hash(gc) > .965 && length(gf) < .17 ? .22 : 0.;
         float pd = 1e3;
         for(int i=0;i<PUD;i++){
           vec2 q = (vP - uPud[i].xy) / uPud[i].zw;
@@ -1116,6 +1117,36 @@ const INTRO_LINES = [
 const INTRO_X = [-50, -44, -38, -32];
 const intro = { on: false, step: -1, hold: 0 };
 const bubble = document.getElementById('bubble'), bubbleP = new THREE.Vector3();
+// бабл рисуется в маленьком канвасе и растягивается без сглаживания: кривая форма, пиксельный шрифт с засечками
+function drawBubble(text) {
+  const S = 3, ctx = bubble.getContext('2d');
+  ctx.font = '10px Georgia, "Times New Roman", serif';
+  const tw = Math.ceil(ctx.measureText(text).width), w = tw + 18, h = 20, tail = 9, W = w + 6, H = h + tail + 4;
+  bubble.width = W; bubble.height = H;
+  bubble.style.width = W * S + 'px'; bubble.style.height = H * S + 'px';
+  const j = () => (Math.random() - .5) * 3;             // кривизна каждой точки
+  const x0 = 3, y0 = 2, x1 = x0 + w, y1 = y0 + h, tx = x0 + w * .28;
+  ctx.beginPath();
+  ctx.moveTo(x0 + 4 + j(), y0 + j());
+  ctx.quadraticCurveTo(x0 + w * .5, y0 - 2 + j(), x1 - 3 + j(), y0 + 1 + j());
+  ctx.quadraticCurveTo(x1 + 2 + j(), y0 + h * .5, x1 - 1 + j(), y1 - 2 + j());
+  ctx.quadraticCurveTo(x0 + w * .6, y1 + 2 + j(), tx + 6, y1 + j() * .5);
+  ctx.lineTo(tx - 3 + j(), y1 + tail);                  // кривой хвостик вниз-влево
+  ctx.lineTo(tx - 2, y1 - .5);
+  ctx.quadraticCurveTo(x0 - 1 + j(), y1 + 1 + j(), x0 + 1 + j(), y0 + h * .55 + j());
+  ctx.quadraticCurveTo(x0 - 2 + j(), y0 + 2 + j(), x0 + 4 + j(), y0 + j());
+  ctx.closePath();
+  ctx.fillStyle = '#fff'; ctx.fill();
+  ctx.fillStyle = '#000'; ctx.textBaseline = 'middle';
+  ctx.font = '10px Georgia, "Times New Roman", serif';
+  ctx.fillText(text, x0 + 9, y0 + h / 2 + 1);
+  const im = ctx.getImageData(0, 0, W, H), d = im.data;   // жёсткий порог: ни одного серого пикселя
+  for (let i = 0; i < d.length; i += 4) {
+    const on = d[i + 3] > 110, white = d[i] > 150;
+    d[i] = d[i + 1] = d[i + 2] = on && white ? 255 : 0; d[i + 3] = on ? 255 : 0;
+  }
+  ctx.putImageData(im, 0, 0);
+}
 function startIntro() {
   Object.assign(intro, { on: true, step: -1, hold: 0 });
   Object.assign(boat, { x: DAM_X + 4, z: 0, yaw: 0, v: 0, w: 0 });
@@ -1135,7 +1166,7 @@ function updateIntro(dt) {
     boat.v += (1.6 - boat.v) * Math.min(1, 2 * dt);   // медленно и ровно
     if (next < INTRO_X.length && boat.x >= INTRO_X[next]) {
       intro.step = next; intro.hold = next === INTRO_LINES.length - 1 ? 2.2 : 3.2;
-      bubble.textContent = INTRO_LINES[next]; bubble.style.opacity = 1;
+      drawBubble(INTRO_LINES[next]); bubble.style.opacity = 1;
     }
   }
   bubbleP.set(boat.x, 1.6, boat.z).project(camera);
