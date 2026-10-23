@@ -327,14 +327,17 @@ const waterMat = new THREE.ShaderMaterial({
         float vd = pn > t ? mix(silt * uDrain, inner, smoothstep(t, t + .04, pn)) : silt * uDrain;
         // у правого края лужи — две-три тонкие прерывистые линии вдоль кромки: видно, что это вода
         float pr = vnoise((vP + vec2(.12, 0.))*.15) * .7 + vnoise((vP + vec2(.12, 0.))*.5 + 7.) * .3;
-        float side = smoothstep(.0, .002, pn - pr);
+        float pz = vnoise((vP + vec2(0., .12))*.15) * .7 + vnoise((vP + vec2(0., .12))*.5 + 7.) * .3;
+        float gl = max(length(vec2(pn - pr, pn - pz)) / .12, 1e-4);
+        float dd = (pn - t) / gl;                                   // расстояние до кромки в мире — линия ровной толщины
+        float side = smoothstep(.2, .7, (pn - pr) / .12 / gl);       // только правый край
         float dl = 0.;
         for(int k=0;k<3;k++){
-          float o = .012 + float(k)*.014;
-          float dash = smoothstep(.42, .6, vnoise(vP*vec2(1.4, 2.6) + float(k)*9.));
-          dl = max(dl, exp(-pow((pn - t - o)/.0035, 2.)) * dash * (1. - float(k)*.3));
+          float o = .14 + float(k)*.17;
+          float dash = smoothstep(.45, .62, vnoise(vP*.9 + float(k)*9.));
+          dl = max(dl, ring(dd, o, .011) * dash * (1. - float(k)*.3));   // тонко, как круги у домов
         }
-        vd = max(vd, dl * side * 1.2 * smoothstep(.1, .35, uDrain));
+        vd = max(vd, dl * side * .42 * smoothstep(.1, .35, uDrain));
         v = mix(v, vd, smoothstep(${DAM_X}. + .5, ${DAM_X}. + 2.5, vP.x));   // мягкий переход у дамбы
       }
       gl_FragColor = vec4(vec3(v), 0.);   // alpha 0 = вода
