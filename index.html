@@ -1119,12 +1119,13 @@ const intro = { on: false, step: -1, hold: 0 };
 const bubble = document.getElementById('bubble'), bubbleP = new THREE.Vector3();
 // бабл рисуется в маленьком канвасе и растягивается без сглаживания: кривая форма, пиксельный шрифт с засечками
 function drawBubble(text) {
-  const S = 3, ctx = bubble.getContext('2d');
-  ctx.font = '10px Georgia, "Times New Roman", serif';
-  const tw = Math.ceil(ctx.measureText(text).width), w = tw + 18, h = 20, tail = 9, W = w + 6, H = h + tail + 4;
+  const S = 2 / (devicePixelRatio || 1), ctx = bubble.getContext('2d');   // 1 пиксель бабла = 2 физических, как мелкий шаг растра
+  const FONT = '13px "Times New Roman", Times, serif';
+  ctx.font = FONT;
+  const tw = Math.ceil(ctx.measureText(text).width), w = tw + 22, h = 22, tail = 11, W = w + 8, H = h + tail + 5;
   bubble.width = W; bubble.height = H;
   bubble.style.width = W * S + 'px'; bubble.style.height = H * S + 'px';
-  const j = () => (Math.random() - .5) * 3;             // кривизна каждой точки
+  const j = () => (Math.random() - .5) * 3.5;             // кривизна каждой точки
   const x0 = 3, y0 = 2, x1 = x0 + w, y1 = y0 + h, tx = x0 + w * .28;
   ctx.beginPath();
   ctx.moveTo(x0 + 4 + j(), y0 + j());
@@ -1138,11 +1139,11 @@ function drawBubble(text) {
   ctx.closePath();
   ctx.fillStyle = '#fff'; ctx.fill();
   ctx.fillStyle = '#000'; ctx.textBaseline = 'middle';
-  ctx.font = '10px Georgia, "Times New Roman", serif';
-  ctx.fillText(text, x0 + 9, y0 + h / 2 + 1);
+  ctx.font = FONT;
+  ctx.fillText(text, x0 + 11, y0 + h / 2 + 1);
   const im = ctx.getImageData(0, 0, W, H), d = im.data;   // жёсткий порог: ни одного серого пикселя
   for (let i = 0; i < d.length; i += 4) {
-    const on = d[i + 3] > 110, white = d[i] > 150;
+    const on = d[i + 3] > 110, white = d[i] > 150;   // порог чёрного — тонкие штрихи и засечки
     d[i] = d[i + 1] = d[i + 2] = on && white ? 255 : 0; d[i + 3] = on ? 255 : 0;
   }
   ctx.putImageData(im, 0, 0);
