@@ -50,11 +50,13 @@ const DAM_WALL = DAM_X + 1.8;   // край штабеля
 // течение от дамбы: слабое в протоке, у самой дамбы сильнее хода кораблика
 const damCurrent = (x, z) => inChannel(x, z) ? .3 + 7 * Math.exp(-Math.max(0, x - DAM_WALL) / 1.4) : .3;
 const FIGURES = 22;         // фигур в городе
-const LOGS = 130;           // брёвен на воде
+const LOGS = 100;           // брёвен всего — ровно столько нужно дамбе
 const GOAL = 100;           // сколько нужно на дамбу
 const CAP = 5;              // помещается на борт; следующее — переворот
 const BOAT_START = { x: -27, z: 0 };
-const TEST = new URLSearchParams(location.search).has('test');
+const QS = new URLSearchParams(location.search);
+const TEST = QS.has('test');      // ?test — 96 на дамбе, 4 бревна рядом
+const ENDING = QS.has('ending');  // ?ending — сразу показать финал
 
 // ---------- форма воды (то же самое в шейдере) ----------
 const clamp01 = v => Math.min(1, Math.max(0, v));
@@ -275,7 +277,8 @@ const waterMat = new THREE.ShaderMaterial({
       if(uDrain > 0. && vP.x > ${DAM_X}. + 1.){
         float pn = vnoise(vP*.15) * .7 + vnoise(vP*.5 + 7.) * .3;
         float t = mix(-.05, .62, uDrain);
-        v = pn > t ? v * smoothstep(t, t + .06, pn) : 0.;
+        float silt = .006 + .014 * vnoise(vP*2.3 + 31.) + .01 * vnoise(vP*7.1 - 5.);   // сухой ил — лёгкий мелкий дизер
+        v = pn > t ? mix(silt * uDrain, v, smoothstep(t, t + .06, pn)) : silt * uDrain;
         v = max(v, ring(pn, t, .006) * .45 * smoothstep(0., .1, uDrain));
       }
       v = v < .012 ? 0. : v;              // гамма растра вытягивает даже еле заметное — отсекаем хвосты
@@ -1245,11 +1248,12 @@ function newGame() {
 function freezeCity() {
   frozen = true;
   for (const b of blocks) { b.vx = b.vz = b.w = 0; if (b.pin && !b.pin.parent) b.pin.vx = b.pin.vz = 0; }
-  scatterLogs(LOGS);
-  if (TEST) {                               // ?test — дамба почти собрана, у протоки ждут 4 бревна
-    while (delivered < GOAL - 4) { addToStack(); delivered++; }
-    for (let i = 0; i < 4; i++) logs.push(new Log(DAM_X + 7 + i * 1.6, rr(-1.5, 1.5)));
-  }
+  if (TEST || ENDING) {
+    const left = ENDING ? 0 : 4;
+    while (delivered < GOAL - left) { addToStack(); delivered++; }
+    for (let i = 0; i < left; i++) logs.push(new Log(DAM_X + 7 + i * 1.6, rr(-1.5, 1.5)));
+    if (ENDING) { won = true; Object.assign(boat, { x: DAM_X + 5, z: -1, yaw: Math.PI * .9, v: 0 }); }
+  } else scatterLogs(LOGS);
   layBed();
 }
 
@@ -1266,7 +1270,7 @@ function layBed() {
   for (let t = 0, n = 0; t < 20000 && n < 900; t++) {
     const x = rr(DAM_X + 2, RX + 2), z = rr(-RZ - 2, RZ + 2);
     if (sdWater(x, z) > -.4 || !freeSpot(x, z, .3) && sdWater(x, z) < -1.2) continue;
-    const k = R() < .4 ? 0 : 1 + Math.floor(R() * 3), s = k ? rr(.06, .24) : rr(.3, 1.1);
+    const k = R() < .008 ? 0 : 1 + Math.floor(R() * 3), s = k ? rr(.06, .24) : rr(.4, 1.2);   // палок — пара штук
     q.setFromEuler(new THREE.Euler(0, R() * 6.28, k ? rr(-.4, .4) : rr(-.1, .1)));
     lists[k].push({ m: m.compose(v.set(x, k ? -s * .25 : .02, z), q, k ? sc.set(s, s * .6, s) : sc.set(s, 1, 1)).clone(), dry: bedDry(x, z) });
     n++;
