@@ -1,0 +1,1288 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Flooded Village</title>
+<style>
+  html,body{margin:0;height:100%;background:#000;overflow:hidden}
+  canvas{display:block;image-rendering:pixelated}
+  .ui{position:fixed;color:#fff;font-family:ui-monospace,Consolas,monospace;pointer-events:none;white-space:pre}
+  #intro{left:0;right:0;top:18px;text-align:center;font-size:12px;letter-spacing:.12em;opacity:0;transition:opacity 1.2s}
+</style>
+<script type="importmap">
+{"imports":{
+  "three":"https://unpkg.com/three@0.160.0/build/three.module.js",
+  "three/addons/":"https://unpkg.com/three@0.160.0/examples/jsm/"
+}}
+</script>
+</head>
+<body>
+<div id="intro" class="ui">collect the logs · repair the dam</div>
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { mergeGeometries, mergeVertices } from 'three/addons/utils/BufferGeometryUtils.js';
+
+// ---------- настройки ----------
+const MAX = 96;             // лимит блоков (и сегментов в шейдере воды)
+const MAG = 8;              // сила «магнита» при появлении
+const REACH = 2.6;          // радиус затухания поля
+const SPIN = 0.9;           // насколько толчок крутит
+const DAMP = 1.5;           // затухание скорости
+const STEP = 0.1;           // пауза между блоками внутри фигуры, с
+const FIG_PAUSE = 0.08;     // пауза между фигурами, с
+const MIN_CROSS = 2;        // короче — не скрещиваются, чтобы не было месива
+const GAP = 1.3;            // минимальный зазор между осями нескрещенных домиков
+const FIELD = 22;           // сила поля
+const HALF_W = 0.4;         // полуширина сечения
+const WALL = 0.92;          // высота стены
+const PEAK = 1.36;          // высота конька
+
+// мир: заводь, слева протока и прорванная дамба
+const RX = 38, RZ = 24;     // полуоси заводи
+const CH_END = -RX + 6;     // где протока вливается в заводь
+const DAM_X = -56;          // линия дамбы
+const DAM_WALL = DAM_X + 1.8;   // край штабеля
+// течение от дамбы: слабое в протоке, у самой дамбы сильнее хода кораблика
+const damCurrent = (x, z) => inChannel(x, z) ? .3 + 7 * Math.exp(-Math.max(0, x - DAM_WALL) / 1.4) : .3;
+const FIGURES = 22;         // фигур в городе
+const LOGS = 130;           // брёвен на воде
+const GOAL = 100;           // сколько нужно на дамбу
+const CAP = 5;              // помещается на борт; следующее — переворот
+const BOAT_START = { x: -27, z: 0 };
+
+// ---------- форма воды (то же самое в шейдере) ----------
+const clamp01 = v => Math.min(1, Math.max(0, v));
+function smin(a, b, k) { const h = Math.max(k - Math.abs(a - b), 0) / k; return Math.min(a, b) - h * h * k * 0.25; }
+function sdBasin(x, z) {
+  const qx = x / RX, qz = z / RZ, a = Math.atan2(qz, qx);
+  const r = 1 + .07 * Math.sin(3 * a + 1.3) + .05 * Math.sin(5 * a + .4) + .03 * Math.sin(9 * a + 2);
+  return (Math.hypot(qx, qz) - r) * RZ;
+}
+const chanHW = x => { const t = clamp01((x - DAM_X) / (CH_END - DAM_X)); return 3.6 + 1.8 * t * t; };
+const sdChannel = (x, z) => Math.max(Math.abs(z) - chanHW(x), x - CH_END);
+const sdWater = (x, z) => smin(sdBasin(x, z), sdChannel(x, z), 4);
+function waterGrad(x, z) {
+  const e = 0.05, gx = sdWater(x + e, z) - sdWater(x - e, z), gz = sdWater(x, z + e) - sdWater(x, z - e);
+  const l = Math.hypot(gx, gz) || 1;
+  return [gx / l, gz / l];
+}
+const inChannel = (x, z) => x < CH_END && Math.abs(z) < chanHW(x) + 0.5;
+
+const GLSL_WORLD = `
+  float smin(float a, float b, float k){ float h = max(k - abs(a-b), 0.)/k; return min(a,b) - h*h*k*.25; }
+  float sdBasin(vec2 p){
+    vec2 q = p / vec2(${RX}., ${RZ}.); float a = atan(q.y, q.x);
+    float r = 1. + .07*sin(3.*a+1.3) + .05*sin(5.*a+.4) + .03*sin(9.*a+2.);
+    return (length(q) - r) * ${RZ}.;
+  }
+  float chanHW(float x){ float t = clamp((x - (${DAM_X}.))/(${CH_END}. - (${DAM_X}.)), 0., 1.); return 3.6 + 1.8*t*t; }
+  float sdWater(vec2 p){ return smin(sdBasin(p), max(abs(p.y) - chanHW(p.x), p.x - (${CH_END}.)), 4.); }
+`;
+const GLSL_NOISE = `
+  float ring(float d, float r, float w){ float x = (d - r)/w; return exp(-x*x); }
+  float hash(vec2 p){ return fract(sin(dot(p, vec2(127.1,311.7)))*43758.5453); }
+  float vnoise(vec2 p){
+    vec2 i = floor(p), f = fract(p); f = f*f*(3.-2.*f);
+    return mix(mix(hash(i), hash(i+vec2(1,0)), f.x), mix(hash(i+vec2(0,1)), hash(i+vec2(1,1)), f.x), f.y);
+  }
+  float sdSeg(vec2 p, vec2 a, vec2 b){
+    vec2 pa = p-a, ba = b-a;
+    float h = clamp(dot(pa,ba)/max(dot(ba,ba),1e-5), 0., 1.);
+    return length(pa - ba*h);
+  }
+`;
+
+// ---------- рендер ----------
+const renderer = new THREE.WebGLRenderer({ antialias: false });
+const DPR = Math.min(devicePixelRatio || 1, 2);
+renderer.setPixelRatio(DPR);
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.BasicShadowMap;   // жёсткие пиксельные края
+document.body.appendChild(renderer.domElement);
+
+let pixel = 4;              // шаг растра halftone, в физических пикселях
+const rt = new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType });
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x000000);
+
+const CAM_OFF = new THREE.Vector3(-3, 26, 26);   // фиксированный вид под 45°
+const camera = new THREE.PerspectiveCamera(28, 1, 0.1, 600);
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
+controls.enableRotate = false;
+controls.enablePan = false;
+controls.minDistance = 22; controls.maxDistance = 46;
+controls.target.set(BOAT_START.x, 0, BOAT_START.z);
+camera.position.copy(controls.target).add(CAM_OFF);
+
+const sun = new THREE.DirectionalLight(0xffffff, 3.4);
+const SUN_DIR = new THREE.Vector3(-6, 9, -3).normalize();
+sun.position.copy(SUN_DIR).multiplyScalar(40);
+sun.castShadow = true;
+sun.shadow.mapSize.set(4096, 4096);
+Object.assign(sun.shadow.camera, { left: -26, right: 26, top: 26, bottom: -26, near: 1, far: 90 });
+sun.shadow.bias = -0.0015;
+sun.shadow.normalBias = 0.05;
+scene.add(sun, sun.target);
+// тень на воду и землю: чёрная, альфа кадра не трогается — рёбра растра не рисуются по краю тени
+const shadowCatcher = new THREE.Mesh(new THREE.PlaneGeometry(600, 600), new THREE.ShadowMaterial({
+  color: 0x000000, opacity: 1, transparent: true, depthWrite: false,
+  blending: THREE.CustomBlending, blendSrc: THREE.SrcAlphaFactor, blendDst: THREE.OneMinusSrcAlphaFactor,
+  blendSrcAlpha: THREE.ZeroFactor, blendDstAlpha: THREE.OneFactor
+}));
+shadowCatcher.rotation.x = -Math.PI / 2;
+shadowCatcher.position.y = 0.003;
+shadowCatcher.receiveShadow = true;
+scene.add(shadowCatcher);
+scene.add(new THREE.AmbientLight(0xffffff, 0.14));   // тень — ровный растр, а не дыра
+
+// падающая тень — идеально чёрная: грань смотрит на солнце, а прямого света нет → значит в тени
+const SHADOW_BLACK = `
+#if NUM_DIR_LIGHTS > 0
+  if (dot(normal, directionalLights[0].direction) > .02 && dot(reflectedLight.directDiffuse, vec3(1.)) < 1e-4) outgoingLight = vec3(0.);
+#endif
+#include <opaque_fragment>`;
+const blackShadows = sh => { sh.fragmentShader = sh.fragmentShader.replace('#include <opaque_fragment>', SHADOW_BLACK); };
+const blockMat = new THREE.MeshLambertMaterial({ color: 0xffffff, flatShading: true });
+blockMat.onBeforeCompile = blackShadows;
+const windowMat = new THREE.MeshBasicMaterial({ color: 0xffffff });   // светятся — видны и на теневой стене
+
+// ---------- вода: контуры вокруг блоков, берег, водопад ----------
+const segU = Array.from({ length: MAX }, () => new THREE.Vector4());
+const infoU = Array.from({ length: MAX }, () => new THREE.Vector4());
+const WAKE = 24;            // точки кильватера кораблика
+const wakeU = Array.from({ length: WAKE }, () => new THREE.Vector4(0, 0, -100, 0));
+const PUD = 64;             // чёрные лужи на берегу: x, z, rx, rz
+const pudU = Array.from({ length: PUD }, () => new THREE.Vector4(1e4, 1e4, 1, 1));
+const RK = 18;              // камни в протоке и за дамбой: x, z, r
+const rockU = Array.from({ length: RK }, () => new THREE.Vector3(1e4, 1e4, .1));
+const waterMat = new THREE.ShaderMaterial({
+  defines: { MAX, WAKE, PUD, RK },
+  uniforms: { uSeg: { value: segU }, uInfo: { value: infoU }, uWake: { value: wakeU }, uPud: { value: pudU }, uRock: { value: rockU }, uCount: { value: 0 },
+              uTime: { value: 0 }, uFall: { value: 1 } },
+  vertexShader: `
+    varying vec2 vP;
+    void main(){
+      vec4 w = modelMatrix * vec4(position,1.);
+      vP = w.xz;
+      gl_Position = projectionMatrix * viewMatrix * w;
+    }`,
+  fragmentShader: `
+    uniform vec4 uSeg[MAX];
+    uniform vec4 uInfo[MAX];
+    uniform int uCount;
+    uniform vec4 uWake[WAKE];
+    uniform float uTime, uFall;
+    uniform vec4 uPud[PUD];
+    uniform vec3 uRock[RK];
+    varying vec2 vP;
+    ${GLSL_NOISE}
+    ${GLSL_WORLD}
+    void main(){
+      float sw = sdWater(vP);
+      float n1 = vnoise(vP*.9 + vec2(uTime*.05, -uTime*.04));
+      float n2 = vnoise(vP*2.6 - uTime*.07);
+      float ph = uTime*0.05, fp = fract(ph), ip = floor(ph);
+
+      // суша: болотистая почва шумом — мелкое зерно, пятна мха, чёрные лужи; чёткая кромка берега
+      if(sw > 0.){
+        float g1 = vnoise(vP*1.3), g2 = vnoise(vP*5.1 + 3.), g3 = vnoise(vP*14. - 7.);
+        float v = g3 > .9 ? .05 : 0.;                      // земля чёрная, редкое зерно — фактуру дают трава, палочки и камни
+        float pd = 1e3;
+        for(int i=0;i<PUD;i++){
+          vec2 q = (vP - uPud[i].xy) / uPud[i].zw;
+          pd = min(pd, (length(q) - 1.) * min(uPud[i].z, uPud[i].w));
+        }
+        pd += (vnoise(vP*1.6) - .5)*.5 + (g2 - .5)*.12;     // рваный край лужи
+        if(pd < 0.) v = 0.;
+        v = max(v, ring(pd, .06, .02) * .55 * smoothstep(.15, .45, g2 + .1));   // пунктирная кромка лужи
+        v *= smoothstep(.15, .9, sw);
+        v = max(v, ring(sw, 0., .018) * .5);   // тонкая кромка берега
+        gl_FragColor = vec4(vec3(v), 0.);
+        return;
+      }
+
+      float dmin = 1e5, wave = 0.;
+      for(int i=0;i<MAX;i++){
+        if(i>=uCount) break;
+        float d = sdSeg(vP, uSeg[i].xy, uSeg[i].zw) - uInfo[i].x;
+        dmin = min(dmin, d);
+        float age = uTime - uInfo[i].y;
+        if(age < 2.){
+          float arc = smoothstep(.3, .65, vnoise(vP*.8 + uInfo[i].y*13.1));
+          wave = max(wave, ring(d, 0.25 + age*1.2, 0.013) * exp(-age*2.2) * arc);
+        }
+      }
+      for(int j=0;j<WAKE;j++){
+        float age = uTime - uWake[j].z;
+        if(age < 0. || age > 2.5) continue;
+        float arc = smoothstep(.42, .7, vnoise(vP*1.3 + uWake[j].z*7.3));
+        wave = max(wave, ring(length(vP - uWake[j].xy), .25 + age*.65, .011) * exp(-age*1.9) * uWake[j].w * arc);
+      }
+      float d = max(dmin, 0.);
+      float dw = d + (n1 - .5)*.14;
+      float c = ring(dw, 0.2, 0.011) * smoothstep(.15, .45, n2 + .2);
+      for(int k=0;k<3;k++){
+        // кольцо рождается и гаснет при нулевой яркости, рисунок дуг едет вместе с ним — без рывка на шве цикла
+        float r = 0.42 + (float(k) + fp)*0.32;
+        float id = float(k) - ip;
+        float arc = smoothstep(.4, .66, vnoise(vP*.45 + id*3.7 + uTime*.03));
+        float fade = smoothstep(.42, .62, r) * (1. - smoothstep(.95, 1.38, r));
+        c = max(c, ring(dw, r, 0.011) * arc * fade * (.6 + .5*n2));
+      }
+      // прибой вдоль берега
+      float ds = -sw + (n1 - .5)*.2;
+      for(int k=0;k<2;k++){
+        float r = 0.35 + (float(k) + fract(uTime*.04))*0.5;
+        float arc = smoothstep(.38, .64, vnoise(vP*.25 + (float(k) - floor(uTime*.04))*5.1));
+        float fade = smoothstep(.35, .6, r) * (1. - smoothstep(.9, 1.35, r));
+        c = max(c, ring(ds, r, .009) * arc * fade * .5);
+      }
+      // поток в протоке: линии тока (функция тока обтекания цилиндра — огибают камни),
+      // по ним бегут короткие штрихи; в середине русла быстрее, у берегов медленнее
+      float chan = 1. - smoothstep(-.3, 1.5, abs(vP.y) - chanHW(vP.x));
+      if(vP.x < ${CH_END}. && chan > 0.){
+        float fade = (1. - smoothstep(${DAM_X - 3}., ${DAM_X + 12}., vP.x)) * smoothstep(${DAM_X - 45}., ${DAM_X - 15}., vP.x) * chan;
+        float psi = vP.y, hide = 1., wake = 0.;
+        for(int i=0;i<RK;i++){
+          vec2 d = vP - uRock[i].xy; float r = uRock[i].z, l2 = dot(d, d);
+          psi -= d.y * r*r * 1.6 / (l2 + .02);                       // ψ = y(1 − R²/r²): линии обходят камень
+          hide *= smoothstep(r*.8, r*1.05, sqrt(l2));
+          wake = max(wake, exp(-d.y*d.y/(r*r*1.5)) * step(0., d.x) * exp(-d.x*.5));   // за камнем вода «рвётся»
+        }
+        psi += (vnoise(vec2(vP.x*.12 - uTime*.04, vP.y*.25)) - .5) * .7;   // медленно гуляющее русло
+        float hw = chanHW(vP.x), sp = .62;
+        float lane = psi/sp, id = floor(lane), g = abs(fract(lane) - .5)*sp;
+        float vel = .25 + 1.1*(1. - pow(clamp(abs(vP.y)/hw, 0., 1.), 2.));
+        float along = vP.x*.55 - uTime*vel*1.3 + hash(vec2(id, 3.))*20.;
+        float dash = smoothstep(.56, .78, vnoise(vec2(along, id*3.1 + wake*4.)));
+        float thin = .008 + .006*vnoise(vec2(along*2., id));
+        float acc = exp(-pow(g/thin, 2.)) * dash * (1. - wake*.6);
+        c = max(c, acc * .6 * hide * fade);
+      }
+      float v = max(c*0.42, wave*0.45);
+      v = v < .012 ? 0. : v;              // гамма растра вытягивает даже еле заметное — отсекаем хвосты
+      gl_FragColor = vec4(vec3(v), 0.);   // alpha 0 = вода
+    }`
+});
+const water = new THREE.Mesh(new THREE.PlaneGeometry(600, 600), waterMat);
+water.rotation.x = -Math.PI / 2;
+scene.add(water);
+
+// круги вокруг брёвен — маленькие декали, смешиваются через max
+const rippleMat = new THREE.ShaderMaterial({
+  uniforms: { uLen: { value: 1 }, uSeed: { value: 0 }, uTime: { value: 0 } },
+  vertexShader: `varying vec2 vL; void main(){ vL = position.xy; gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.); }`,
+  fragmentShader: `
+    uniform float uLen, uSeed, uTime;
+    varying vec2 vL;
+    ${GLSL_NOISE}
+    void main(){
+      float d = sdSeg(vL, vec2(-uLen*.5, 0.), vec2(uLen*.5, 0.)) - .13;
+      float n = vnoise(vL*2.6 + uSeed - uTime*.08);
+      float c = ring(d, .12, .01) * smoothstep(.3, .6, n + .1);
+      float fp = fract(uTime*.08 + uSeed*.1), ip = floor(uTime*.08 + uSeed*.1);
+      for(int k=0;k<2;k++){
+        float r = .26 + (float(k) + fp)*.2;
+        float arc = smoothstep(.5, .72, vnoise(vL*.9 + (float(k) - ip)*3.7 + uSeed));
+        float fade = smoothstep(.26, .38, r) * (1. - smoothstep(.45, .66, r));
+        c = max(c, ring(d, r, .01) * arc * fade * .7);
+      }
+      gl_FragColor = vec4(vec3(c*.34), 0.);
+    }`,
+  transparent: true, depthWrite: false,
+  blending: THREE.CustomBlending, blendEquation: THREE.MaxEquation, blendSrc: THREE.OneFactor, blendDst: THREE.OneFactor
+});
+
+// ---------- пост: ч/б halftone + контуры граней ----------
+const postMat = new THREE.ShaderMaterial({
+  uniforms: { tDiffuse: { value: rt.texture }, uTexel: { value: new THREE.Vector2() }, uMode: { value: 0 }, uCell: { value: pixel } },
+  vertexShader: `varying vec2 vUv; void main(){ vUv = uv; gl_Position = vec4(position.xy,0.,1.); }`,
+  fragmentShader: `
+    uniform sampler2D tDiffuse; uniform vec2 uTexel; uniform int uMode; uniform float uCell;
+    varying vec2 vUv;
+    float lum(vec2 uv){ vec4 c = texture2D(tDiffuse, uv); return pow(clamp(dot(c.rgb, vec3(.299,.587,.114)),0.,1.), 1./2.2); }
+    float b2(vec2 a){ a = floor(a); return fract(dot(a, vec2(.5, a.y*.75))); }
+    float b4(vec2 a){ return b2(.5*a)*.25 + b2(a); }
+    float b8(vec2 a){ return b4(.5*a)*.25 + b2(a); }
+    void main(){
+      vec4 c0 = texture2D(tDiffuse, vUv);
+      float l0 = lum(vUv);
+      // три тона на предметах и траве: чёрный, ровный растр, белый.
+      // Вода (alpha 0) не квантуется — иначе тонкие круги на пороге мерцают кадр к кадру
+      float l = c0.a < .2 ? l0 : l0 < .1 ? 0. : l0 < .62 ? .4 : 1.;
+      float o;
+      if(uMode==0){
+        // регулярный растр под 45°, площадь точки = яркость
+        vec2 p = mat2(.7071,-.7071,.7071,.7071) * gl_FragCoord.xy / uCell;
+        if(l < .5){ o = length(fract(p)-.5) < sqrt(l/3.1416) ? 1. : 0.; }
+        else      { o = length(fract(p+.5)-.5) < sqrt((1.-l)/3.1416) ? 0. : 1.; }
+        if(l > .9) o = 1.;
+        if(l < .03) o = 0.;
+      } else {
+        o = l > b8(floor(gl_FragCoord.xy/max(uCell*.5,1.)))*.98+.01 ? 1. : 0.;
+      }
+      // чёрные рёбра — только на предметах
+      if(c0.a > .5){
+        vec2 t = uTexel*1.5;
+        float e = 0.;
+        for(int i=0;i<4;i++){
+          vec2 off = i==0?vec2(t.x,0.):i==1?vec2(-t.x,0.):i==2?vec2(0.,t.y):vec2(0.,-t.y);
+          vec4 cn = texture2D(tDiffuse, vUv+off);
+          e = max(e, abs(lum(vUv+off) - l0));
+          if(cn.a < .5) e = 1.;
+        }
+        if(e > .12) o = 0.;
+      }
+      gl_FragColor = vec4(vec3(o), 1.);
+    }`,
+  depthTest: false, depthWrite: false
+});
+const postScene = new THREE.Scene();
+const postCam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+postScene.add(new THREE.Mesh(new THREE.PlaneGeometry(2, 2), postMat));
+
+function resize() {
+  const w = innerWidth, h = innerHeight;
+  renderer.setSize(w, h);
+  camera.aspect = w / h; camera.updateProjectionMatrix();
+  const rw = Math.floor(w * DPR), rh = Math.floor(h * DPR);
+  rt.setSize(rw, rh);
+  postMat.uniforms.uTexel.value.set(1 / rw, 1 / rh);
+  postMat.uniforms.uCell.value = pixel;
+}
+addEventListener('resize', resize);
+resize();
+
+// ---------- геометрия «домика» ----------
+const geoCache = new Map();
+const TIER2 = 5;            // дома длиннее — в два этажа, с навесом-мокоси между этажами
+const wallH = len => len > TIER2 ? WALL * 1.55 : WALL;
+// японская крыша: низкий уклон, вогнутые скаты, широкие свесы с чуть приподнятыми краями
+function roofGeo(len, base, rise, over, overEnd, thick) {
+  const W = HALF_W + over, N = 6, pts = [];
+  const y = t => base + rise * Math.pow(t, 2) + (1 - t) ** 3 * .08;   // t: 0 — край свеса, 1 — конёк
+  for (let i = 0; i <= N; i++) pts.push([-W * (1 - i / N), y(i / N)]);
+  for (let i = N - 1; i >= 0; i--) pts.push([W * (1 - i / N), y(i / N)]);
+  const sh = new THREE.Shape();
+  sh.moveTo(...pts[0]);
+  pts.slice(1).forEach(q => sh.lineTo(...q));
+  for (let i = pts.length - 1; i >= 0; i--) sh.lineTo(pts[i][0] * .985, pts[i][1] - thick);
+  sh.closePath();
+  const L = len + overEnd * 2;
+  const g = new THREE.ExtrudeGeometry(sh, { depth: L, bevelEnabled: false });
+  g.translate(0, 0, -L / 2);
+  g.rotateY(Math.PI / 2);               // длина вдоль X
+  return g;
+}
+function houseGeo(len) {
+  const key = len.toFixed(2);
+  if (geoCache.has(key)) return geoCache.get(key);
+  const H = wallH(len), parts = [];
+  const walls = new THREE.BoxGeometry(len, H, HALF_W * 2).toNonIndexed();
+  walls.translate(0, H / 2, 0);
+  parts.push(walls);
+  if (len > TIER2) parts.push(roofGeo(len, WALL * .74, .2, .28, .12, .06));   // мокоси — средняя часть прячется в стене
+  const base = H - .06, rise = .62, oe = .24;
+  parts.push(roofGeo(len, base, rise, .32, oe, .08));
+  const L = len + oe * 2, top = base + rise;
+  const ridge = new THREE.BoxGeometry(L + .06, .09, .11).toNonIndexed();   // конёк
+  ridge.translate(0, top + .02, 0);
+  parts.push(ridge);
+  for (const sx of [-1, 1]) {           // торцевые плитки конька чуть выше — как онигавара
+    const cap = new THREE.BoxGeometry(.1, .18, .15).toNonIndexed();
+    cap.translate(sx * (L / 2 + .02), top + .07, 0);
+    parts.push(cap);
+  }
+  const g = mergeGeometries(parts);
+  geoCache.set(key, g);
+  return g;
+}
+
+// окна: длинные ленты сёдзи по обеим длинным стенам + пара панелей на торцах
+const winCache = new Map();
+function windowGeo(len) {
+  const key = len.toFixed(2);
+  if (winCache.has(key)) return winCache.get(key);
+  // панели с тонкими перемычками, группами по 4, между группами — простенок
+  const pw = 0.26, gap = 0.05, post = 0.3, wh = 0.24, off = HALF_W + 0.006, margin = 0.25;
+  const ys = len > TIER2 ? [WALL * .4, WALL * 1.14] : [WALL * .52];   // у двухэтажных — две ленты
+  const unit = 4 * pw + 3 * gap;
+  const xs = [];
+  const groups = Math.floor((len - 2 * margin + post) / (unit + post));
+  if (groups > 0) {
+    const total = groups * unit + (groups - 1) * post;
+    for (let g = 0; g < groups; g++) for (let i = 0; i < 4; i++)
+      xs.push(-total / 2 + g * (unit + post) + i * (pw + gap) + pw / 2);
+  } else {
+    const n = Math.max(1, Math.floor((len - 2 * margin + gap) / (pw + gap)));
+    const total = n * pw + (n - 1) * gap;
+    for (let i = 0; i < n; i++) xs.push(-total / 2 + i * (pw + gap) + pw / 2);
+  }
+  const parts = [];
+  for (const y of ys) for (const x of xs) for (const z of [-off, off]) {
+    const b = new THREE.BoxGeometry(pw, wh, 0.01);
+    b.translate(x, y, z);
+    parts.push(b);
+  }
+  for (const x of [-len / 2 - 0.006, len / 2 + 0.006]) for (const z of [-0.14, 0.14]) {
+    const b = new THREE.BoxGeometry(0.01, wh, pw * 0.9);
+    b.translate(x, ys[0], z);
+    parts.push(b);
+  }
+  const g = mergeGeometries(parts);
+  winCache.set(key, g);
+  return g;
+}
+
+// ---------- блоки ----------
+let time = 0;
+const blocks = [];
+let frozen = false;         // город достроен — домики больше не двигаются
+
+class Block {
+  constructor(s) {
+    this.x = s.x; this.z = s.z; this.yaw = s.yaw; this.len = s.len;
+    this.x0 = s.x; this.z0 = s.z; this.yaw0 = s.yaw;   // поза при появлении
+    this.fig = s.fig;                     // id фигуры: скрещиваться можно только внутри неё
+    this.links = new Set();               // с кем скрещены
+    this.vx = 0; this.vz = 0; this.w = 0;
+    this.h = 0; this.vh = -0.5;           // всплеск при «шлепке»
+    this.mass = 0.6 + this.len;
+    this.I = this.mass * this.len * this.len / 12 + 0.05;
+    this.birth = time;
+    this.phase = Math.random() * 6.28;
+    this.pin = null;                      // точка пересечения: корневой {x,z,vx,vz,mass,I} или {parent,t}
+    this.pinS = 0;                        // где пин на собственной оси
+    this.g = new THREE.Group();
+    this.mesh = new THREE.Mesh(houseGeo(s.len), blockMat);
+    this.mesh.castShadow = this.mesh.receiveShadow = true;
+    this.baseY = -s.sink * 0.15;          // почти не тонут, лишь касаются воды
+    this.mesh.add(new THREE.Mesh(windowGeo(s.len), windowMat));
+    this.g.add(this.mesh);
+    scene.add(this.g);
+    this.sync();
+  }
+  get dx() { return Math.cos(this.yaw); }
+  get dz() { return -Math.sin(this.yaw); }
+  ends() {
+    const hx = this.dx * this.len / 2, hz = this.dz * this.len / 2;
+    return [{ x: this.x - hx, z: this.z - hz }, { x: this.x + hx, z: this.z + hz }];
+  }
+  // прибить к точке P; parent — балка, вместе с которой точка ездит. Скрещенная группа — одно жёсткое тело
+  setPin(P, parent) {
+    this.pinS = (P.x - this.x) * this.dx + (P.z - this.z) * this.dz;
+    if (parent) {
+      this.pin = { parent, t: (P.x - parent.x) * parent.dx + (P.z - parent.z) * parent.dz };
+      const rb = parent.rootBlock(), rp = rb.pin;
+      this.relYaw = this.yaw - rb.yaw;
+      rp.mass += this.mass;
+      rp.I += this.mass * (this.len * this.len / 12 + (this.x - rp.x) ** 2 + (this.z - rp.z) ** 2);
+    } else {
+      this.pin = { x: P.x, z: P.z, vx: 0, vz: 0, mass: this.mass,
+                   I: this.mass * (this.len * this.len / 12 + this.pinS * this.pinS) + 0.05 };
+    }
+  }
+  pinWorld() {
+    const p = this.pin.parent;
+    return p ? { x: p.x + p.dx * this.pin.t, z: p.z + p.dz * this.pin.t } : this.pin;
+  }
+  rootBlock() {
+    let b = this;
+    while (b.pin.parent) b = b.pin.parent;
+    return b;
+  }
+  update(dt) {
+    if (!frozen) {
+      const e = Math.exp(-DAMP * dt);
+      this.vx *= e; this.vz *= e; this.w *= e;
+      if (this.pin) {
+        if (this.pin.parent) this.yaw = this.rootBlock().yaw + this.relYaw;   // без шарниров: угол зафиксирован
+        else this.yaw += this.w * dt;
+        const P = this.pinWorld();
+        this.x = P.x - this.dx * this.pinS; this.z = P.z - this.dz * this.pinS;
+      } else {
+        this.yaw += this.w * dt;
+        this.x += this.vx * dt; this.z += this.vz * dt;
+      }
+    }
+    this.vh += (-40 * this.h - 5 * this.vh) * dt; this.h += this.vh * dt;
+    this.sync();
+  }
+  sync() {
+    const bob = Math.sin(time * 0.9 + this.phase) * 0.015;
+    this.g.position.set(this.x, this.baseY + this.h + bob, this.z);
+    this.g.rotation.y = this.yaw;
+    this.mesh.rotation.x = Math.sin(time * 0.7 + this.phase) * 0.006;
+  }
+  dispose() { scene.remove(this.g); }
+}
+
+// ближайшие точки двух 2D-отрезков
+function ptSeg(p, a, b) {
+  const abx = b.x - a.x, abz = b.z - a.z;
+  const t = Math.min(1, Math.max(0, ((p.x - a.x) * abx + (p.z - a.z) * abz) / (abx * abx + abz * abz || 1)));
+  return { x: a.x + abx * t, z: a.z + abz * t };
+}
+function segSeg(a1, a2, b1, b2) {
+  const rx = a2.x - a1.x, rz = a2.z - a1.z, sx = b2.x - b1.x, sz = b2.z - b1.z;
+  const den = rx * sz - rz * sx;
+  if (Math.abs(den) > 1e-9) {
+    const qx = b1.x - a1.x, qz = b1.z - a1.z;
+    const t = (qx * sz - qz * sx) / den, u = (qx * rz - qz * rx) / den;
+    if (t >= 0 && t <= 1 && u >= 0 && u <= 1) {
+      const p = { x: a1.x + rx * t, z: a1.z + rz * t };
+      return { pa: p, pb: p, d: 0 };
+    }
+  }
+  const c = [
+    [a1, ptSeg(a1, b1, b2)], [a2, ptSeg(a2, b1, b2)],
+    [ptSeg(b1, a1, a2), b1], [ptSeg(b2, a1, a2), b2]
+  ];
+  let best = null;
+  for (const [pa, pb] of c) {
+    const d = Math.hypot(pa.x - pb.x, pa.z - pb.z);
+    if (!best || d < best.d) best = { pa, pb, d };
+  }
+  return best;
+}
+
+// направление отталкивания a от b; при пересечении — поперёк b
+function awayDir(a, b, r) {
+  let nx = r.pa.x - r.pb.x, nz = r.pa.z - r.pb.z;
+  const l = Math.hypot(nx, nz);
+  if (l > 1e-4) return [nx / l, nz / l];
+  const px = -b.dz, pz = b.dx;
+  const side = Math.sign((a.x - b.x) * px + (a.z - b.z) * pz) || (Math.random() < .5 ? -1 : 1);
+  return [px * side, pz * side];
+}
+
+// толчок силой (fx,fz) в точке p; скрещенная группа получает его целиком
+function impulse(o, p, fx, fz) {
+  if (frozen) return;
+  if (o.pin) {
+    const P = o.rootBlock().pin, rb = o.rootBlock(), rx = p.x - P.x, rz = p.z - P.z;
+    rb.w -= (rx * fz - rz * fx) / P.I * SPIN;
+    P.vx += fx / P.mass; P.vz += fz / P.mass;
+  } else {
+    o.vx += fx / o.mass; o.vz += fz / o.mass;
+    const rx = p.x - o.x, rz = p.z - o.z;
+    o.w -= (rx * fz - rz * fx) / o.I * SPIN;
+  }
+}
+const sameBody = (a, b) => a.pin && b.pin && a.rootBlock() === b.rootBlock();
+
+// «магнит»: новый блок отталкивает и подкручивает уже стоящие
+function magnet(nb) {
+  const [b1, b2] = nb.ends();
+  for (const o of blocks) {
+    if (o === nb || sameBody(o, nb)) continue;
+    const [a1, a2] = o.ends();
+    const r = segSeg(a1, a2, b1, b2);
+    if (r.d > REACH * 3) continue;
+    const [nx, nz] = awayDir(o, nb, r);
+    const F = MAG * Math.exp(-r.d / REACH) * (0.7 + 0.6 * Math.random());
+    impulse(o, r.pa, nx * F, nz * F);
+    o.vh -= F * 0.05;
+  }
+}
+
+// поле: нескрещенные домики не подпускают друг друга ближе GAP, берег не пускает на сушу
+function field(dt) {
+  for (let i = 0; i < blocks.length; i++) {
+    const a = blocks[i], [a1, a2] = a.ends();
+    for (const e of [a1, a2, a]) {
+      const sd = sdWater(e.x, e.z);
+      if (sd > -1.5) { const [gx, gz] = waterGrad(e.x, e.z), f = (sd + 1.5) * 14 * dt; impulse(a, e, -gx * f, -gz * f); }
+    }
+    for (let j = i + 1; j < blocks.length; j++) {
+      const b = blocks[j];
+      if (sameBody(a, b)) continue;
+      if (Math.hypot(a.x - b.x, a.z - b.z) > (a.len + b.len) / 2 + GAP) continue;
+      const [b1, b2] = b.ends();
+      const r = segSeg(a1, a2, b1, b2);
+      if (r.d >= GAP) continue;
+      const [nx, nz] = awayDir(a, b, r);
+      const k = 1 - r.d / GAP, f = FIELD * k * k * dt;
+      impulse(a, r.pa, nx * f, nz * f);
+      impulse(b, r.pb, -nx * f, -nz * f);
+    }
+  }
+}
+
+function spawn(spec) {
+  // фигура могла уже уехать/повернуться — ставим блок в систему её первого блока
+  const ref = blocks.find(o => o.fig === spec.fig);
+  if (ref) {
+    const d = ref.yaw - ref.yaw0, c = Math.cos(d), sn = Math.sin(d);
+    const vx = spec.x - ref.x0, vz = spec.z - ref.z0;
+    spec = { ...spec, x: ref.x + vx * c + vz * sn, z: ref.z - vx * sn + vz * c, yaw: spec.yaw + d };
+  }
+  if (blocks.length >= MAX - 1) return;   // последний слот — кораблик
+  const b = new Block(spec);
+  const [b1, b2] = b.ends();
+  for (const o of blocks) {
+    if (o.fig !== b.fig || o.len < MIN_CROSS || b.len < MIN_CROSS) continue;   // мелочь не скрещиваем — поле разведёт
+    const [a1, a2] = o.ends();
+    const r = segSeg(a1, a2, b1, b2);
+    if (r.d > 0) continue;
+    if (!o.pin) o.setPin(r.pa, null);
+    if (!b.pin) b.setPin(r.pa, o);
+    b.links.add(o); o.links.add(b);
+  }
+  blocks.push(b);
+  magnet(b);
+}
+
+// ---------- генератор фигур ----------
+const R = Math.random, rr = (a, b) => a + R() * (b - a), pick = a => a[Math.floor(R() * a.length)];
+const bar = (x, z, yaw, len, o = {}) => ({ x, z, yaw, len, sink: o.sink ?? rr(.08, .16) });
+// балка через точку c, точка пересечения смещена от середины
+const through = (c, yaw, len, o) => {
+  const t = rr(-.38, .38) * len;
+  return bar(c.x - Math.cos(yaw) * t, c.z + Math.sin(yaw) * t, yaw, len, o);
+};
+const stub = (x, z) => bar(x, z, R() * Math.PI, rr(.8, 1.1));
+
+const FIG = {
+  // балки лучей пересекаются не серединой — лучи выходят разной длины
+  star(c) {
+    const n = 3, base = R() * Math.PI;             // больше 3 широких домиков в узле — каша
+    const long = Math.floor(R() * n);
+    return Array.from({ length: n }, (_, i) =>
+      through(c, base + i * Math.PI / n + rr(-.1, .1), i === long ? rr(8, 11) : rr(2.5, 6.5), { sink: .08 + i * .025 }));
+  },
+  cross(c) {
+    const a = R() * Math.PI;
+    return [through(c, a, rr(3.5, 7)), through(c, a + pick([-1, 1]) * rr(.8, 1.4), rr(2.5, 5), { sink: .06 })];
+  },
+  dot(c) { return [stub(c.x, c.z)]; },
+  dots(c) { return Array.from({ length: pick([2, 3, 4]) }, () => stub(c.x + rr(-2, 2), c.z + rr(-2, 2))); },
+  branch(c) {
+    const a = R() * Math.PI, L = rr(8, 11), dx = Math.cos(a), dz = -Math.sin(a);
+    const out = [bar(c.x, c.z, a, L)];
+    for (const side of [-1, 1]) {           // по одной поперечине на каждую половину — не лезут друг на друга
+      const p = { x: c.x + dx * side * rr(.2, .38) * L, z: c.z + dz * side * rr(.2, .38) * L };
+      out.push(through(p, a + pick([-1, 1]) * rr(.8, 1.3), rr(2.5, 4.5), { sink: .06 }));
+    }
+    return out;
+  },
+  bundle(c) {
+    const a = R() * Math.PI, px = Math.sin(a), pz = Math.cos(a), n = pick([2, 3]);
+    return Array.from({ length: n }, (_, i) => {
+      const o = (i - (n - 1) / 2) * rr(.45, .7);
+      return bar(c.x + px * o, c.z + pz * o, a + rr(-.08, .08), rr(2, 5));
+    });
+  },
+  knot(c) {
+    const a = R() * Math.PI, L = rr(2.2, 3.2), sa = R() * 6.28, sd = rr(1.6, 2.2);
+    return [through(c, a, L), through(c, a + pick([-1, 1]) * rr(.8, 1.3), L * rr(.75, 1), { sink: .05 }),
+            stub(c.x + Math.cos(sa) * sd, c.z + Math.sin(sa) * sd)];
+  },
+};
+const FIG_MIX = ['star', 'cross', 'cross', 'branch', 'bundle', 'knot', 'knot', 'dot', 'dots'];
+
+// очередь появления: блоки фигуры идут по одному
+const queue = [];
+let timer = 0, figId = 0, settle = 0;
+function enqueueFigure(name, c) {
+  const list = FIG[name](c), fig = ++figId;
+  list.forEach(s => s.fig = fig);
+  list.forEach((s, i) => queue.push({ s, wait: i === 0 ? FIG_PAUSE : STEP }));
+}
+// город: фигуры раскиданы по заводи с зазором, подальше от берега, протоки и старта кораблика
+function planCity() {
+  const pts = [];
+  for (let t = 0; t < 3000 && pts.length < FIGURES; t++) {
+    const x = rr(-RX, RX), z = rr(-RZ, RZ);
+    if (sdBasin(x, z) > -6.5) continue;
+    if (Math.hypot(x - BOAT_START.x, z - BOAT_START.z) < 9) continue;
+    if (pts.some(p => Math.hypot(p.x - x, p.z - z) < 9)) continue;
+    pts.push({ x, z });
+  }
+  for (const p of pts) enqueueFigure(pick(FIG_MIX), p);
+}
+
+// ---------- брёвна ----------
+const LOG_R = 0.13;
+const logGeo = new THREE.CylinderGeometry(LOG_R, LOG_R, 1, 8);
+logGeo.rotateZ(Math.PI / 2);                // вдоль X, длина задаётся scale.x
+const logs = [];
+class Log {
+  constructor(x, z, len) {
+    this.x = x; this.z = z; this.yaw = R() * Math.PI; this.len = len ?? rr(.9, 1.4);
+    this.vx = 0; this.vz = 0; this.w = 0;
+    this.phase = R() * 6.28; this.noPick = 0;
+    this.mesh = new THREE.Mesh(logGeo, blockMat);
+    this.mesh.castShadow = true;
+    this.mesh.scale.x = this.len;
+    this.ripple = new THREE.Mesh(new THREE.PlaneGeometry(this.len + 1.6, 1.6), rippleMat.clone());
+    this.ripple.material.uniforms.uLen.value = this.len;
+    this.ripple.material.uniforms.uSeed.value = R() * 100;
+    this.ripple.rotation.order = 'YXZ';
+    scene.add(this.mesh, this.ripple);
+  }
+  get dx() { return Math.cos(this.yaw); }
+  get dz() { return -Math.sin(this.yaw); }
+  update(dt, fall) {
+    if (this.x < CH_END) this.vx += .35 * dt;   // в протоке течение уносит от дамбы, в озере брёвна стоят
+    const e = Math.exp(-1.2 * dt);
+    this.vx *= e; this.vz *= e; this.w *= Math.exp(-1.2 * dt);
+    this.x += this.vx * dt; this.z += this.vz * dt; this.yaw += this.w * dt;
+    // берег
+    const sd = sdWater(this.x, this.z), lim = -(this.len / 2 + .1);
+    if (sd > lim) {
+      const [gx, gz] = waterGrad(this.x, this.z);
+      this.x -= gx * (sd - lim); this.z -= gz * (sd - lim);
+      const vn = this.vx * gx + this.vz * gz;
+      if (vn > 0) { this.vx -= gx * vn * 1.5; this.vz -= gz * vn * 1.5; }
+    }
+    if (inChannel(this.x, this.z) && this.x < DAM_X + 3) this.vx += damCurrent(this.x, this.z) * 2 * dt;
+    { const n = pushOutRocks(this, .3); if (n) { const vn = this.vx * n[0] + this.vz * n[1]; if (vn < 0) { this.vx -= n[0] * vn * 1.4; this.vz -= n[1] * vn * 1.4; } } }
+    // домики
+    for (const b of blocks) {
+      if (Math.abs(b.x - this.x) > b.len / 2 + 2 || Math.abs(b.z - this.z) > b.len / 2 + 2) continue;
+      const [a1, a2] = b.ends(), q = ptSeg(this, a1, a2);
+      let nx = this.x - q.x, nz = this.z - q.z;
+      const l = Math.hypot(nx, nz) || 1e-4, pen = HALF_W + .35 - l;
+      if (pen <= 0) continue;
+      nx /= l; nz /= l;
+      this.x += nx * pen; this.z += nz * pen;
+      const vn = this.vx * nx + this.vz * nz;
+      if (vn < 0) { this.vx -= nx * vn * 1.4; this.vz -= nz * vn * 1.4; this.w += rr(-.3, .3); }
+    }
+    this.noPick = Math.max(0, this.noPick - dt);
+    this.sync();
+  }
+  sync() {
+    const bob = Math.sin(time * 1.1 + this.phase) * .02;
+    this.mesh.position.set(this.x, .04 + bob, this.z);
+    this.mesh.rotation.set(0, this.yaw, Math.sin(time * .8 + this.phase) * .03);
+    this.ripple.position.set(this.x, .004, this.z);
+    this.ripple.rotation.set(-Math.PI / 2, this.yaw, 0);
+    this.ripple.material.uniforms.uTime.value = time;
+  }
+  dispose() { scene.remove(this.mesh, this.ripple); this.ripple.material.dispose(); this.ripple.geometry.dispose(); }
+}
+const rockMat = new THREE.MeshLambertMaterial({ color: 0x9a9a9a, vertexColors: true });   // серые — ложатся в растр
+rockMat.onBeforeCompile = sh => {             // без чёрного контура (alpha .3), чёрная тень сохраняется
+  blackShadows(sh);
+  sh.fragmentShader = sh.fragmentShader.replace('#include <opaque_fragment>', 'gl_FragColor = vec4(outgoingLight, .3);');
+};
+const rockGroup = new THREE.Group();
+scene.add(rockGroup);
+const rocks = [];
+function placeRocks() {
+  rockGroup.clear(); rocks.length = 0;
+  for (const [dx, z] of [[-9, 1.6], [-5.5, .3], [4, -2.4], [9.5, 1.1]])   // четыре камня в протоке
+    rocks.push({ x: DAM_X + dx + rr(-.6, .6), z: z + rr(-.4, .4), r: rr(.16, .26) });
+  rocks.forEach((o, i) => {
+    rockU[i].set(o.x, o.z, o.r);
+    const g = noisyStone(o.r, .3, 2);                        // бугристый камень, едва торчит из воды
+    g.scale(rr(1, 1.2), .5, rr(.85, 1.1));
+    const m = new THREE.Mesh(g, rockMat);
+    m.position.set(o.x, -o.r * .12, o.z);
+    m.rotation.y = R() * 6.28;
+    m.castShadow = m.receiveShadow = true;
+    rockGroup.add(m);
+  });
+  for (let i = rocks.length; i < RK; i++) rockU[i].set(1e4, 1e4, .1);
+}
+function pushOutRocks(p, rad) {             // p: {x,z}; вернёт нормаль, если упёрлись
+  for (const o of rocks) {
+    const dx = p.x - o.x, dz = p.z - o.z, l = Math.hypot(dx, dz) || 1e-4, pen = o.r + rad - l;
+    if (pen > 0) { p.x += dx / l * pen; p.z += dz / l * pen; return [dx / l, dz / l]; }
+  }
+  return null;
+}
+function freeSpot(x, z, rad) {
+  if (rocks.some(o => Math.hypot(o.x - x, o.z - z) < o.r + rad + .3)) return false;
+  if (sdWater(x, z) > -1.2 || inChannel(x, z) && x < DAM_WALL + 4) return false;
+  for (const b of blocks) {
+    const [a1, a2] = b.ends(), q = ptSeg({ x, z }, a1, a2);
+    if (Math.hypot(x - q.x, z - q.z) < HALF_W + rad) return false;
+  }
+  return true;
+}
+function scatterLogs(n) {
+  for (let t = 0; t < 20000 && n > 0; t++) {
+    const x = rr(DAM_X + 6, RX + 3), z = rr(-RZ - 3, RZ + 3);
+    if (!freeSpot(x, z, 1) || Math.hypot(x - boat.x, z - boat.z) < 4) continue;
+    if (logs.some(l => Math.abs(l.x - x) < 1 && Math.abs(l.z - z) < 1)) continue;
+    logs.push(new Log(x, z)); n--;
+  }
+}
+
+// ---------- дамба ----------
+const damGroup = new THREE.Group();
+scene.add(damGroup);
+const stackGeo = new THREE.CylinderGeometry(.14, .14, 1.12, 8);
+stackGeo.rotateX(Math.PI / 2);              // вдоль Z — поперёк протоки
+function buildDamRuins() {
+  const hw = chanHW(DAM_X);
+  const stake = (z, h, tilt) => {           // сваи, что остались от старой дамбы
+    const m = new THREE.Mesh(new THREE.CylinderGeometry(.17, .2, h, 8), blockMat);
+    m.position.set(DAM_X + .2, h / 2 - .2, z);
+    m.rotation.set(tilt, 0, rr(-.15, .15));
+    m.castShadow = true;
+    damGroup.add(m);
+  };
+  stake(-hw + .4, 2.1, .05); stake(-hw + 1.1, 1.3, -.12);
+  stake(hw - .45, 1.7, -.08); stake(hw - 1.3, .9, .2);
+  const beam = new THREE.Mesh(stackGeo, blockMat);   // обломок бревна поперёк
+  beam.scale.set(1, 1, 2.2);
+  beam.position.set(DAM_X + .4, .25, -hw + 1.6);
+  beam.rotation.set(0, .5, .25);
+  beam.castShadow = true;
+  damGroup.add(beam);
+}
+const stack = [];
+function addToStack() {
+  const i = stack.length, hw = chanHW(DAM_X + 1);
+  const perLine = Math.floor((hw * 2 - .2) / 1.16), line = Math.floor(i / perLine), col = i % perLine;
+  const m = new THREE.Mesh(stackGeo, blockMat);
+  m.position.set(DAM_X + .5 + (line % 4) * .29 + Math.floor(line / 4) * .14,
+                 .04 + Math.floor(line / 4) * .25,
+                 -hw + .7 + col * 1.16 + (line % 2) * .4 + rr(-.05, .05));
+  m.rotation.y = rr(-.06, .06);
+  m.castShadow = m.receiveShadow = true;
+  damGroup.add(m);
+  stack.push(m);
+}
+
+// ---------- берег: трава, тростник, кусты ----------
+const sstep = (a, b, v) => { const t = clamp01((v - a) / (b - a)); return t * t * (3 - 2 * t); };
+function noise2(x, z) {                     // value noise — как vnoise в шейдере
+  const h = (i, j) => { const s = Math.sin(i * 127.1 + j * 311.7) * 43758.5453; return s - Math.floor(s); };
+  const ix = Math.floor(x), iz = Math.floor(z), fx = x - ix, fz = z - iz;
+  const ux = fx * fx * (3 - 2 * fx), uz = fz * fz * (3 - 2 * fz);
+  const a = h(ix, iz), b = h(ix + 1, iz), c = h(ix, iz + 1), d = h(ix + 1, iz + 1);
+  return a + (b - a) * ux + (c - a) * uz + (a - b - c + d) * ux * uz;
+}
+
+// кочка: веер узких треугольников-травинок; у тростника на макушке метёлка
+const GRASS_H = 0.18;       // общий масштаб высоты травы
+function tuftGeo(blades, hMin, hMax, spread, heads) {
+  hMin *= GRASS_H; hMax *= GRASS_H;
+  const pos = [];
+  for (let i = 0; i < blades; i++) {
+    const a = R() * 6.28, r = R() * spread, x = Math.cos(a) * r, z = Math.sin(a) * r;
+    const h = rr(hMin, hMax), w = rr(.035, .06), la = a + rr(-.6, .6), lean = rr(.08, .4) * h;
+    const tx = x + Math.cos(la) * lean, tz = z + Math.sin(la) * lean;
+    const ba = la + Math.PI / 2, bx = Math.cos(ba) * w, bz = Math.sin(ba) * w;
+    pos.push(x - bx, 0, z - bz, x + bx, 0, z + bz, tx, h, tz);
+    if (heads && R() < .7) {
+      const hh = rr(.22, .36) * GRASS_H * 2, mx = tx + Math.cos(la) * .04, mz = tz + Math.sin(la) * .04;   // узкий колос
+      pos.push(tx, h - hh * .6, tz, mx + bx * 1.2, h, mz + bz * 1.2, mx, h + hh * .5, mz,
+               tx, h - hh * .6, tz, mx, h + hh * .5, mz, mx - bx * 1.2, h, mz - bz * 1.2);
+    }
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  g.computeVertexNormals();
+  return g;
+}
+// трава без контуров (alpha < .5): тонкие травинки иначе утонут в чёрных рёбрах; качается на ветру
+// трава статичная и освещённая: каждая травинка — свет/растр/тень от солнца, как домики;
+// альфа .3 — без чёрных рёбер, иначе тонкие травинки слипаются в чёрную массу
+const grassMat = new THREE.MeshLambertMaterial({ color: 0xffffff, flatShading: true, side: THREE.DoubleSide });
+grassMat.onBeforeCompile = sh => {             // травинка: тёмное основание → светлая макушка, поверх — свет солнца
+  blackShadows(sh);
+  sh.vertexShader = 'varying float vH;\n' + sh.vertexShader.replace('#include <begin_vertex>', '#include <begin_vertex>\nvH = position.y;');
+  sh.fragmentShader = 'varying float vH;\n' + sh.fragmentShader.replace('#include <opaque_fragment>',
+    'gl_FragColor = vec4(outgoingLight * mix(.05, 1.6, smoothstep(.02, .32, vH)), .3);');
+};
+// куст: несколько гранёных шаров разного размера
+// бугристый камень/ком: сфера, продавленная шумом; в цвет вершин запечены пятна и крапины
+function noisyStone(r, rough = .32, detail = 3) {
+  const g = mergeVertices(new THREE.IcosahedronGeometry(1, detail));
+  const pos = g.attributes.position, col = [], sd = R() * 100, v = new THREE.Vector3();
+  for (let i = 0; i < pos.count; i++) {
+    v.fromBufferAttribute(pos, i);
+    const n = noise2(v.x * 1.6 + sd, v.z * 1.6 + v.y) * .6 + noise2(v.y * 3.2 - sd, v.x * 3.2 + v.z) * .4;
+    v.multiplyScalar(r * (1 + rough * (n - .5) * 2));
+    pos.setXYZ(i, v.x, v.y, v.z);
+    const t = noise2(v.x / r * 5 + sd, v.z / r * 5 - v.y / r * 3), k = t > .72 ? .42 : t < .2 ? .7 : 1;
+    col.push(k, k, k);
+  }
+  g.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
+  g.computeVertexNormals();
+  return g;
+}
+const whiteColors = g => { g.setAttribute('color', new THREE.Float32BufferAttribute(new Array(g.attributes.position.count * 3).fill(1), 3)); return g; };
+function bushGeo() {
+  const parts = [], n = 2 + Math.floor(R() * 4);
+  for (let i = 0; i < n; i++) {
+    const r = rr(.35, .8), g = noisyStone(r, .4, 2);
+    g.scale(rr(1.1, 1.5), rr(.5, .7), rr(1, 1.4));
+    g.scale(rr(.9, 1.3), rr(.65, 1), rr(.9, 1.3));
+    g.rotateY(R() * 6.28);
+    g.translate(rr(-.7, .7), -r * .15, rr(-.7, .7));   // наполовину в земле — плоские валуны, не шары
+    parts.push(g);
+  }
+  return mergeGeometries(parts);
+}
+// кусты, камушки, палочки — без контуров (alpha .3): только белый свет, серый растр и чёрная падающая тень
+const bushMat = new THREE.MeshLambertMaterial({ color: 0xffffff, vertexColors: true });
+bushMat.onBeforeCompile = sh => {
+  blackShadows(sh);
+  sh.fragmentShader = sh.fragmentShader.replace('#include <opaque_fragment>', 'gl_FragColor = vec4(outgoingLight, .3);');
+};
+
+const inPuddle = (x, z, m = 1.15) => pudU.some(p => ((x - p.x) / p.z) ** 2 + ((z - p.y) / p.w) ** 2 < m * m);
+function plantShore() {
+  for (let t = 0, n = 0; t < 20000 && n < PUD; t++) {         // лужи
+    const x = rr(-110, 50), z = rr(-42, 42), sd = sdWater(x, z);
+    if (sd < 2.5 || sd > 18) continue;
+    const rx = rr(.8, 3), rz = rr(.6, 2);
+    if (pudU.slice(0, n).some(p => Math.hypot(p.x - x, p.y - z) < p.z + rx + 1)) continue;
+    pudU[n++].set(x, z, rx, rz);
+  }
+  // трава ковром по всему берегу; чанки 10×10 — рисуются только те, что попали в кадр
+  const geos = {
+    short: [tuftGeo(7, .3, .6, .13), tuftGeo(6, .25, .5, .15)],
+    tall:  [tuftGeo(12, 1.4, 2.4, .18), tuftGeo(9, 1.6, 2.8, .15)],
+    reed:  [tuftGeo(6, 2.2, 3.4, .1, true)],
+  };
+  const m = new THREE.Matrix4(), q = new THREE.Quaternion(), up = new THREE.Vector3(0, 1, 0), v = new THREE.Vector3(), sc = new THREE.Vector3();
+  const place = (list, x, z, s) => {
+    q.setFromAxisAngle(up, R() * 6.28);
+    list.push(m.compose(v.set(x, 0, z), q, sc.set(s, s * rr(.8, 1.2), s)).clone());
+  };
+  const pudDist = (x, z) => {
+    let d = 1e3;
+    for (const p of pudU) d = Math.min(d, (Math.hypot((x - p.x) / p.z, (z - p.y) / p.w) - 1) * Math.min(p.z, p.w));
+    return d;
+  };
+  const CH = 10, DENS = 3.5;
+  for (let cx = -115; cx < 55; cx += CH) for (let cz = -44; cz < 44; cz += CH) {
+    const lists = new Map();
+    for (let i = 0; i < CH * CH * DENS; i++) {
+      const x = cx + R() * CH, z = cz + R() * CH, sd = sdWater(x, z);
+      if (sd < .25 || sd > 22) continue;
+      const pd = pudDist(x, z);
+      if (pd < .05) continue;
+      const meadow = noise2(x * .11, z * .11);
+      if (R() > .72 + .28 * meadow) continue;               // лёгкая неравномерность, без проплешин
+      const wet = sd < 1.6 || pd < .9;                      // у воды и у луж — тростник и высокая
+      const g = wet && R() < .55 ? pick(geos.reed)
+              : wet || sd < 3 || pd < 2 || (meadow > .62 && R() < .5) ? pick(geos.tall)
+              : pick(geos.short);
+      if (!lists.has(g)) lists.set(g, []);
+      place(lists.get(g), x, z, rr(.8, 1.25));
+    }
+    for (const [g, list] of lists) {
+      const im = new THREE.InstancedMesh(g, grassMat, list.length);
+      im.receiveShadow = true;
+      list.forEach((mm, i) => im.setMatrixAt(i, mm));
+      im.computeBoundingSphere();
+      scene.add(im);
+    }
+  }
+  // палочки и камушки
+  const stickG = whiteColors(new THREE.CylinderGeometry(.025, .03, 1, 5)); stickG.rotateZ(Math.PI / 2);
+  const stoneGs = [0, 1, 2].map(() => {
+    const g = noisyStone(1, .35, 2);
+    g.scale(rr(.8, 1.3), rr(.5, .75), rr(.8, 1.2));
+    return g;
+  });
+  const junk = [[stickG, []], ...stoneGs.map(g => [g, []])];
+  for (let t = 0, n = 0; t < 40000 && n < 1400; t++) {
+    const x = rr(-115, 55), z = rr(-44, 44), sd = sdWater(x, z);
+    if (sd < .15 || sd > 20 || inPuddle(x, z, 1.05)) continue;
+    const isStick = R() < .55, slot = isStick ? junk[0] : junk[1 + Math.floor(R() * 3)];
+    q.setFromEuler(new THREE.Euler(0, R() * 6.28, isStick ? rr(-.15, .15) : rr(-.3, .3)));
+    const sz = isStick ? rr(.25, .8) : rr(.06, .2);
+    slot[1].push(m.compose(v.set(x, isStick ? .03 : -sz * .22, z), q,
+      isStick ? sc.set(sz, 1, 1) : sc.set(sz, sz, sz)).clone());
+    n++;
+  }
+  for (const [g, list] of junk) {
+    const im = new THREE.InstancedMesh(g, bushMat, list.length);
+    list.forEach((mm, i) => im.setMatrixAt(i, mm));
+    im.castShadow = im.receiveShadow = true;
+    im.computeBoundingSphere();
+    scene.add(im);
+  }
+  // кусты — купами по шуму
+  const bushGeos = [bushGeo(), bushGeo(), bushGeo(), bushGeo()];
+  const bb = bushGeos.map(() => []), aroundGrass = [];
+  for (let t = 0, n = 0; t < 30000 && n < 260; t++) {
+    const x = rr(-115, 55), z = rr(-44, 44), sd = sdWater(x, z);
+    if (sd < 1.2 || sd > 16 || inPuddle(x, z, 1.4)) continue;
+    if (noise2(x * .18 + 9, z * .18 - 3) < .6 || R() > .5) continue;
+    const sc0 = rr(.4, .95);
+    place(bb[Math.floor(R() * bb.length)], x, z, sc0);
+    for (let j = 0; j < 14; j++) {                   // высокая трава обступает валун
+      const a = R() * 6.28, d = sc0 * rr(.7, 1.5);
+      place(aroundGrass, x + Math.cos(a) * d, z + Math.sin(a) * d, rr(.8, 1.2));
+    }
+    n++;
+  }
+  const ag = new THREE.InstancedMesh(geos.tall[0], grassMat, aroundGrass.length);
+  aroundGrass.forEach((mm, i) => ag.setMatrixAt(i, mm));
+  ag.receiveShadow = true; ag.computeBoundingSphere();
+  scene.add(ag);
+  bushGeos.forEach((g, i) => {
+    if (!bb[i].length) return;
+    const im = new THREE.InstancedMesh(g, bushMat, bb[i].length);
+    im.castShadow = im.receiveShadow = true;
+    bb[i].forEach((mm, j) => im.setMatrixAt(j, mm));
+    im.frustumCulled = false;
+    scene.add(im);
+  });
+}
+plantShore();
+
+// ---------- кораблик ----------
+const BOAT_R = 0.46;        // радиус столкновения
+const boat = { x: 0, z: 0, yaw: 0, v: 0, w: 0, g: new THREE.Group(), body: new THREE.Group(),
+               wakeT: 0, wakeI: 0, cargo: [], tip: 0, unloadT: 0, roll: 0, spill: [] };
+{
+  const s = new THREE.Shape();              // корпус сверху: острый нос вперёд по +X
+  s.moveTo(-0.42, -0.17); s.lineTo(0.2, -0.17); s.lineTo(0.48, 0); s.lineTo(0.2, 0.17); s.lineTo(-0.42, 0.17); s.closePath();
+  const hull = new THREE.ExtrudeGeometry(s, { depth: 0.16, bevelEnabled: false });
+  hull.rotateX(-Math.PI / 2);
+  boat.body.add(new THREE.Mesh(hull, blockMat));
+  const cabin = new THREE.Mesh(houseGeo(0.55), blockMat);   // рубка — домик на носу
+  cabin.scale.set(0.33, 0.22, 0.33);
+  cabin.position.set(-0.29, 0.16, 0);
+  boat.body.add(cabin);
+  boat.g.add(boat.body);
+  boat.g.scale.setScalar(1.45);
+  boat.body.traverse(o => { o.castShadow = o.receiveShadow = true; });
+  scene.add(boat.g);
+}
+// брёвна поперёк палубы перед рубкой, в натуральную величину, торчат за борта: три внизу, два на них, шестое — на макушку
+const DECK = [[.24, .25, 0], [.07, .25, 0], [-.1, .25, 0], [.155, .41, 0], [-.015, .41, 0], [.07, .57, 0]];
+
+const keys = {};
+addEventListener('keyup', e => { keys[e.code] = false; });
+
+let delivered = 0, won = false;
+function showIntro() {
+  const m = document.getElementById('intro');
+  m.style.opacity = .8;
+  clearTimeout(showIntro.t);
+  showIntro.t = setTimeout(() => m.style.opacity = 0, 6000);
+}
+
+const TIP_T = 5;             // переворот: плавно ложится на бок и медленно выпрямляется
+function capsize() {
+  boat.tip = TIP_T;
+  boat.tipFrom = boat.roll;
+  boat.spill = boat.cargo;              // соскальзывают по одному, пока кренится
+  boat.cargo = [];
+}
+function spillOne(m) {
+  boat.body.remove(m);
+  const dx = Math.cos(boat.yaw), dz = -Math.sin(boat.yaw);
+  const sx = Math.sin(boat.yaw), sz = Math.cos(boat.yaw);          // борт, на который валится
+  const d = rr(.7, 1.3), along = rr(-.4, .4);
+  const l = new Log(boat.x + sx * d + dx * along, boat.z + sz * d + dz * along, m.userData.len);
+  l.vx = sx * rr(.2, .45); l.vz = sz * rr(.2, .45); l.w = rr(-.3, .3); l.noPick = 4;
+  logs.push(l);
+}
+
+function updateBoat(dt) {
+  const tipping = boat.tip > 0, load = boat.cargo.length;
+  if (!tipping) {                         // гружёный идёт тяжелее
+    if (keys.KeyW) boat.v = Math.min(6.4 * (1 - load * .06), boat.v + 5.2 * (1 - load * .08) * dt);
+    if (keys.KeyS) boat.v *= Math.exp(-4 * dt);
+  } else boat.v *= Math.exp(-1.2 * dt);
+  boat.v *= Math.exp(-0.35 * dt);
+  const steer = tipping ? 0 : (keys.KeyA ? 1 : 0) - (keys.KeyD ? 1 : 0);
+  const grip = Math.min(1, 0.3 + Math.abs(boat.v) / 1.5);
+  boat.w += (steer * 2.0 * grip - boat.w) * Math.min(1, 6 * dt);
+  boat.yaw += boat.w * dt;
+  const dx = Math.cos(boat.yaw), dz = -Math.sin(boat.yaw);
+  boat.x += dx * boat.v * dt; boat.z += dz * boat.v * dt;
+  if (boat.x < CH_END) boat.x += damCurrent(boat.x, boat.z) * dt;   // течение от дамбы, у самой дамбы не выгрести
+
+  // берег
+  const sd = sdWater(boat.x, boat.z);
+  if (sd > -BOAT_R) {
+    const [gx, gz] = waterGrad(boat.x, boat.z);
+    boat.x -= gx * (sd + BOAT_R); boat.z -= gz * (sd + BOAT_R);
+    if (dx * gx + dz * gz > 0) boat.v *= 0.6;
+  }
+  if (inChannel(boat.x, boat.z) && boat.x < DAM_X + .6) { boat.x = DAM_X + .6; if (dx < 0) boat.v *= .5; }   // страховка, сюда течение не пустит
+
+  { const p = { x: boat.x, z: boat.z }, n = pushOutRocks(p, BOAT_R); if (n) { boat.x = p.x; boat.z = p.z; if (dx * n[0] + dz * n[1] < 0) boat.v *= .55; } }
+  // домики стоят намертво — кораблик просто отскакивает
+  const p = { x: boat.x, z: boat.z };
+  for (const o of blocks) {
+    if (Math.hypot(o.x - p.x, o.z - p.z) > o.len / 2 + 1) continue;
+    const [a1, a2] = o.ends(), q = ptSeg(p, a1, a2);
+    let nx = p.x - q.x, nz = p.z - q.z;
+    const l = Math.hypot(nx, nz) || 1e-4, pen = HALF_W + BOAT_R - l;
+    if (pen <= 0) continue;
+    nx /= l; nz /= l;
+    p.x += nx * pen; p.z += nz * pen;
+    if ((dx * nx + dz * nz) * boat.v < 0) boat.v *= 0.55;
+  }
+  boat.x = p.x; boat.z = p.z;
+
+  // подбор брёвен
+  if (!tipping && !won) {
+    for (let i = logs.length - 1; i >= 0; i--) {
+      const l = logs[i];
+      if (l.noPick > 0) continue;
+      const q = ptSeg(boat, { x: l.x - l.dx * l.len / 2, z: l.z - l.dz * l.len / 2 }, { x: l.x + l.dx * l.len / 2, z: l.z + l.dz * l.len / 2 });
+      if (Math.hypot(q.x - boat.x, q.z - boat.z) > 0.75) continue;
+      l.dispose(); logs.splice(i, 1);
+      const m = new THREE.Mesh(logGeo, blockMat), k = 1 / boat.g.scale.x;
+      m.scale.set(l.len * k, k, k);
+      m.userData.len = l.len;
+      m.position.set(...DECK[boat.cargo.length]);
+      m.rotation.y = Math.PI / 2 + rr(-.06, .06);
+      m.castShadow = m.receiveShadow = true;
+      boat.body.add(m);
+      boat.cargo.push(m);
+      if (boat.cargo.length > CAP) { capsize(); break; }
+    }
+  }
+
+  // разгрузка у дамбы: по бревну, штабель растёт, водопад слабеет
+  if (boat.cargo.length && inChannel(boat.x, boat.z) && boat.x < DAM_WALL + 4.5 && (boat.unloadT -= dt) <= 0) {
+    boat.unloadT = 0.22;
+    boat.body.remove(boat.cargo.pop());
+    addToStack();
+    delivered++;
+    if (delivered >= GOAL) won = true;
+  }
+
+  // кильватер
+  if ((boat.wakeT -= dt) <= 0 && Math.abs(boat.v) > 0.25) {
+    boat.wakeT = rr(.2, .32);
+    wakeU[boat.wakeI++ % WAKE].set(boat.x - dx * 0.6, boat.z - dz * 0.6, time, Math.min(1, Math.abs(boat.v) / 2));
+  }
+
+  // крен: чем больше груза — тем сильнее заваливается и раскачивается; переворот — отдельная анимация
+  const n = boat.cargo.length, sway = .012 + Math.max(0, n - 2) * .018;   // к пяти брёвнам заметно шатает
+  let roll = n * .045 + (Math.sin(time * 1.6) + Math.sin(time * 2.7 + 1) * .4) * sway - boat.w * .05 * (1 + n * .3);
+  if (boat.tip > 0) {
+    boat.tip = Math.max(0, boat.tip - dt);
+    const k = 1 - boat.tip / TIP_T, ease = t => t * t * (3 - 2 * t), peak = 1.25;
+    roll = k < .45 ? boat.tipFrom + (peak - boat.tipFrom) * ease(k / .45) : peak * (1 - ease((k - .45) / .55));
+    while (boat.spill.length && (k >= .45 || roll > .35 + (6 - boat.spill.length) * .1)) spillOne(boat.spill.pop());
+  }
+  boat.roll = roll;
+  const bob = Math.sin(time * 1.7) * 0.012;
+  boat.g.position.set(boat.x, -0.02 + bob, boat.z);
+  boat.g.rotation.set(roll, boat.yaw, 0, 'YXZ');
+}
+
+// камера мягко едет за корабликом
+let follow = true;
+const camDelta = new THREE.Vector3(), snapT = new THREE.Vector3();
+const LIGHT_R = new THREE.Vector3().crossVectors(new THREE.Vector3(0, 1, 0), SUN_DIR).normalize();
+const LIGHT_U = new THREE.Vector3().crossVectors(SUN_DIR, LIGHT_R).normalize();
+function followCam(dt) {
+  // привязка к сетке текселей карты теней: иначе при движении камеры края теней дрожат и круги на воде мигают
+  const texel = (sun.shadow.camera.right - sun.shadow.camera.left) / sun.shadow.mapSize.x;
+  const a = controls.target.dot(LIGHT_R), b = controls.target.dot(LIGHT_U);
+  snapT.copy(LIGHT_R).multiplyScalar(Math.round(a / texel) * texel).addScaledVector(LIGHT_U, Math.round(b / texel) * texel);
+  sun.target.position.copy(snapT);
+  sun.position.copy(snapT).addScaledVector(SUN_DIR, 40);
+  if (!follow) return;
+  camDelta.set(boat.x - controls.target.x, 0, boat.z - controls.target.z).multiplyScalar(Math.min(1, 3 * dt));
+  controls.target.add(camDelta);
+  camera.position.add(camDelta);
+}
+
+// ---------- партия ----------
+function newGame() {
+  blocks.splice(0).forEach(b => b.dispose());
+  logs.splice(0).forEach(l => l.dispose());
+  damGroup.clear(); stack.length = 0;
+  queue.length = 0; timer = 0; figId = 0; frozen = false; settle = 1.5;
+  delivered = 0; won = false;
+  for (const m of [...boat.cargo, ...boat.spill]) boat.body.remove(m);
+  Object.assign(boat, { x: BOAT_START.x, z: BOAT_START.z, yaw: Math.PI, v: 0, w: 0, cargo: [], spill: [], tip: 0, roll: 0 });
+  wakeU.forEach(w => w.set(0, 0, -100, 0));
+  buildDamRuins();
+  placeRocks();
+  planCity();
+  showIntro();
+}
+function freezeCity() {
+  frozen = true;
+  for (const b of blocks) { b.vx = b.vz = b.w = 0; if (b.pin && !b.pin.parent) b.pin.vx = b.pin.vz = 0; }
+  scatterLogs(LOGS);
+}
+
+// ---------- ввод ----------
+renderer.domElement.addEventListener('contextmenu', e => e.preventDefault());
+addEventListener('keydown', e => {
+  keys[e.code] = true;                    // по физическим клавишам — работает в любой раскладке
+  if (e.code === 'KeyT') postMat.uniforms.uMode.value = (postMat.uniforms.uMode.value + 1) % 2;
+  else if (e.code === 'KeyF') follow = !follow;
+  else if (e.code === 'BracketLeft') { pixel = Math.max(2, pixel - 1); resize(); }
+  else if (e.code === 'BracketRight') { pixel = Math.min(10, pixel + 1); resize(); }
+  else if (e.code === 'KeyR') newGame();
+});
+
+
+// ---------- цикл ----------
+newGame();
+const clock = new THREE.Clock();
+function frame() {
+  const dt = Math.min(clock.getDelta(), 1 / 30);
+  time += dt;
+
+  if (!frozen) {
+    timer -= dt;
+    while (queue.length && timer <= 0) {
+      spawn(queue.shift().s);
+      if (queue.length) timer += queue[0].wait;
+    }
+    if (!queue.length && (settle -= dt) <= 0) freezeCity();
+    field(dt);
+    const ep = Math.exp(-DAMP * dt);
+    for (const b of blocks) if (b.pin && !b.pin.parent) {   // сдвиг скрещенных групп целиком
+      const p = b.pin; p.vx *= ep; p.vz *= ep; p.x += p.vx * dt; p.z += p.vz * dt;
+    }
+  }
+  for (const b of blocks) b.update(dt);
+
+  const fall = 1 - delivered / GOAL;
+  waterMat.uniforms.uFall.value = fall;
+  for (const l of logs) l.update(dt, fall);
+  for (let i = 0; i < logs.length; i++) for (let j = i + 1; j < logs.length; j++) {   // брёвна не слипаются
+    const a = logs[i], b = logs[j], dx = b.x - a.x, dz = b.z - a.z;
+    if (Math.abs(dx) > 1 || Math.abs(dz) > 1) continue;
+    const d = Math.hypot(dx, dz) || 1e-3;
+    if (d > 0.9) continue;
+    const f = (0.9 - d) * 0.5 / d;
+    a.x -= dx * f; a.z -= dz * f; b.x += dx * f; b.z += dz * f;
+  }
+  updateBoat(dt);
+  followCam(dt);
+
+  blocks.forEach((b, i) => {
+    const [a1, a2] = b.ends();
+    segU[i].set(a1.x, a1.z, a2.x, a2.z);
+    infoU[i].set(HALF_W, b.birth, 0, 0);
+  });
+  {
+    const dx = Math.cos(boat.yaw) * 0.3, dz = -Math.sin(boat.yaw) * 0.3;
+    segU[blocks.length].set(boat.x - dx, boat.z - dz, boat.x + dx, boat.z + dz);
+    infoU[blocks.length].set(0.16, -100, 0, 0);
+  }
+  waterMat.uniforms.uCount.value = blocks.length + 1;
+  waterMat.uniforms.uTime.value = time;
+
+  controls.update();
+  renderer.setRenderTarget(rt);
+  renderer.render(scene, camera);
+  renderer.setRenderTarget(null);
+  renderer.render(postScene, postCam);
+  requestAnimationFrame(frame);
+}
+frame();
+</script>
+</body>
