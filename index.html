@@ -29,7 +29,7 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { mergeGeometries, mergeVertices } from 'three/addons/utils/BufferGeometryUtils.js';
 
 // ---------- настройки ----------
-const MAX = 96;             // лимит блоков (и сегментов в шейдере воды)
+const MAX = 48;             // лимит блоков (и сегментов в шейдере воды) — держит uniform-бюджет ≤ 224 vec4 для мобильных GPU
 const MAG = 8;              // сила «магнита» при появлении
 const REACH = 2.6;          // радиус затухания поля
 const SPIN = 0.9;           // насколько толчок крутит
@@ -91,7 +91,7 @@ const GLSL_WORLD = `
 `;
 const GLSL_NOISE = `
   float ring(float d, float r, float w){ float x = (d - r)/w; return exp(-x*x); }
-  float hash(vec2 p){ return fract(sin(dot(p, vec2(127.1,311.7)))*43758.5453); }
+  float hash(vec2 p){ vec3 q = fract(vec3(p.xyx) * .1031); q += dot(q, q.yzx + 33.33); return fract((q.x + q.y) * q.z); }   // без sin: совпадает с JS
   float vnoise(vec2 p){
     vec2 i = floor(p), f = fract(p); f = f*f*(3.-2.*f);
     return mix(mix(hash(i), hash(i+vec2(1,0)), f.x), mix(hash(i+vec2(0,1)), hash(i+vec2(1,1)), f.x), f.y);
@@ -178,7 +178,9 @@ reflMat.onBeforeCompile = sh => {
     'vec4 wq = modelMatrix * vec4(transformed, 1.); transformed.x += sin(wq.y*9. + uTime*2.2 + wq.z*1.3) * .03 * (-wq.y);\n' +
     'vW = (modelMatrix * vec4(transformed, 1.)).xyz; vUp = 0.;\n#include <project_vertex>');
   // тёмное, тающее с глубиной, порванное горизонтальной рябью; alpha .1 — как вода: плавный растр без контура
-  sh.fragmentShader = 'uniform float uTime; varying vec3 vW; varying float vUp;\n' + sh.fragmentShader.replace('#include <opaque_fragment>', `
+  sh.fragmentShader = 'uniform float uTime; varying vec3 vW; varying float vUp;\n' + GLSL_WORLD + sh.fragmentShader.replace('#include <opaque_fragment>', `
+    vec3 hitP = cameraPosition + (vW - cameraPosition) * cameraPosition.y / (cameraPosition.y - vW.y);
+    if (sdWater(hitP.xz) > 0.) discard;                         // отражение видно только на воде
     float l = .11;                                             // линии: на экране ≈35 → пунктир растра
     float d = -vW.y;
     l *= 1. - .45 * smoothstep(.05, 1.3, d);
@@ -202,12 +204,12 @@ const WAKE = 24;            // точки кильватера кораблик�
 const wakeU = Array.from({ length: WAKE }, () => new THREE.Vector4(0, 0, -100, 0));
 const PUD = 64;             // чёрные лужи на берегу: x, z, rx, rz
 const pudU = Array.from({ length: PUD }, () => new THREE.Vector4(1e4, 1e4, 1, 1));
-const RK = 18;              // камни в протоке и за дамбой: x, z, r
+const RK = 4;               // камни в протоке и за дамбой: x, z, r
 const rockU = Array.from({ length: RK }, () => new THREE.Vector3(1e4, 1e4, .1));
 const waterMat = new THREE.ShaderMaterial({
   defines: { MAX, WAKE, PUD, RK },
   uniforms: { uSeg: { value: segU }, uInfo: { value: infoU }, uWake: { value: wakeU }, uPud: { value: pudU }, uRock: { value: rockU }, uCount: { value: 0 },
-              uTime: { value: 0 }, uFall: { value: 1 }, uDrain: { value: 0 } },
+              uTime: { value: 0 }, uDrain: { value: 0 } },
   vertexShader: `
     varying vec2 vP;
     void main(){
@@ -220,7 +222,7 @@ const waterMat = new THREE.ShaderMaterial({
     uniform vec4 uInfo[MAX];
     uniform int uCount;
     uniform vec4 uWake[WAKE];
-    uniform float uTime, uFall, uDrain;
+    uniform float uTime, uDrain;
     uniform vec4 uPud[PUD];
     uniform vec3 uRock[RK];
     varying vec2 vP;
@@ -297,7 +299,7 @@ const waterMat = new THREE.ShaderMaterial({
           vec2 d = vP - uRock[i].xy; float r = uRock[i].z, l2 = dot(d, d);
           psi -= d.y * r*r * 1.6 / (l2 + .02);                       // ψ = y(1 − R²/r²): линии обходят камень
           hide *= smoothstep(r*.8, r*1.05, sqrt(l2));
-          wake = max(wake, exp(-d.y*d.y/(r*r*1.5)) * step(0., d.x) * exp(-d.x*.5));   // за камнем вода «рвётся»
+          wake = max(wake, exp(-d.y*d.y/(r*r*1.5)) * smoothstep(-r, r, d.x) * exp(-max(d.x, 0.)*.5));   // за камнем вода «рвётся»
         }
         psi += (vnoise(vec2(vP.x*.12 - uTime*.04, vP.y*.25)) - .5) * .7;   // медленно гуляющее русло
         float hw = chanHW(vP.x), sp = .62;
@@ -314,11 +316,13 @@ const waterMat = new THREE.ShaderMaterial({
       float v = max(c*0.42, wave*0.45);
       v = v < .012 ? 0. : v;              // гамма растра вытягивает даже еле заметное — отсекаем хвосты
       // дамба закрыта: ниже дамбы вода уходит, остаются лужи с тонкой кромкой
-      if(uDrain > 0. && vP.x > ${DAM_X}. + 1.){
+      if(uDrain > 0.){
         float pn = vnoise(vP*.15) * .7 + vnoise(vP*.5 + 7.) * .3;
         float t = mix(-.05, .62, uDrain);
         float silt = mix(.00007, .0006, pow(smoothstep(.2, .85, vnoise(vP*.3) * .55 + vnoise(vP*1.1 + 7.) * .3 + vnoise(vP*3.4 - 2.) * .15), 1.4));   // дно: та же текстура, что у земли вокруг
-        v = pn > t ? mix(silt * uDrain, 0., smoothstep(t, t + .04, pn)) : silt * uDrain;   // лужи — просто чёрные, без кругов и обводок
+        float inner = v * (1. - smoothstep(0., .25, uDrain));   // круги и прибой в лужах гаснут за пару секунд
+        float vd = pn > t ? mix(silt * uDrain, inner, smoothstep(t, t + .04, pn)) : silt * uDrain;
+        v = mix(v, vd, smoothstep(${DAM_X}. + .5, ${DAM_X}. + 2.5, vP.x));   // мягкий переход у дамбы
       }
       gl_FragColor = vec4(vec3(v), 0.);   // alpha 0 = вода
     }`
@@ -348,7 +352,8 @@ const rippleMat = new THREE.ShaderMaterial({
         float fade = smoothstep(.26, .38, r) * (1. - smoothstep(.45, .66, r));
         c = max(c, ring(d, r, .01) * arc * fade * .7);
       }
-      gl_FragColor = vec4(vec3(c*.34), 0.);
+      c *= .34; c = c < .012 ? 0. : c;    // отсекаем хвосты, как у воды — без ореола
+      gl_FragColor = vec4(vec3(c), 0.);
     }`,
   transparent: true, depthWrite: false,
   blending: THREE.CustomBlending, blendEquation: THREE.MaxEquation, blendSrc: THREE.OneFactor, blendDst: THREE.OneFactor
@@ -835,7 +840,7 @@ const rockGroup = new THREE.Group();
 scene.add(rockGroup);
 const rocks = [];
 function placeRocks() {
-  rockGroup.clear(); rocks.length = 0;
+  disposeTree(rockGroup); rocks.length = 0;
   for (const [dx, z] of [[-9, 1.6], [-5.5, .3], [4, -2.4], [9.5, 1.1]])   // четыре камня в протоке
     rocks.push({ x: DAM_X + dx + rr(-.6, .6), z: z + rr(-.4, .4), r: rr(.16, .26) });
   rocks.forEach((o, i) => {
@@ -869,7 +874,7 @@ function freeSpot(x, z, rad) {
 function scatterLogs(n) {
   for (let t = 0; t < 20000 && n > 0; t++) {
     const x = rr(DAM_X + 6, RX + 3), z = rr(-RZ - 3, RZ + 3);
-    if (!freeSpot(x, z, 1) || Math.hypot(x - boat.x, z - boat.z) < 4) continue;
+    if (!freeSpot(x, z, 1) || Math.hypot(x - BOAT_START.x, z - BOAT_START.z) < 4 || x < CH_END + 4 && Math.abs(z) < 2.5) continue;
     if (logs.some(l => Math.abs(l.x - x) < 1 && Math.abs(l.z - z) < 1)) continue;
     logs.push(new Log(x, z)); n--;
   }
@@ -915,7 +920,13 @@ function addToStack() {
 // ---------- берег: трава, тростник, кусты ----------
 const sstep = (a, b, v) => { const t = clamp01((v - a) / (b - a)); return t * t * (3 - 2 * t); };
 function noise2(x, z) {                     // value noise — как vnoise в шейдере
-  const h = (i, j) => { const s = Math.sin(i * 127.1 + j * 311.7) * 43758.5453; return s - Math.floor(s); };
+  const fr = v => v - Math.floor(v);
+  const h = (i, j) => {                       // тот же hash, что в шейдере (без sin)
+    let a = fr(i * .1031), b = fr(j * .1031), c = fr(i * .1031);
+    const d = a * (b + 33.33) + b * (c + 33.33) + c * (a + 33.33);
+    a += d; b += d; c += d;
+    return fr((a + b) * c);
+  };
   const ix = Math.floor(x), iz = Math.floor(z), fx = x - ix, fz = z - iz;
   const ux = fx * fx * (3 - 2 * fx), uz = fz * fz * (3 - 2 * fz);
   const a = h(ix, iz), b = h(ix + 1, iz), c = h(ix, iz + 1), d = h(ix + 1, iz + 1);
@@ -1253,7 +1264,8 @@ function updateBoat(dt) {
     boat.x -= gx * (sd + BOAT_R); boat.z -= gz * (sd + BOAT_R);
     if (dx * gx + dz * gz > 0) boat.v *= 0.6;
   }
-  if (inChannel(boat.x, boat.z) && boat.x < DAM_X + .6) { boat.x = DAM_X + .6; if (dx < 0) boat.v *= .5; }   // страховка, сюда течение не пустит
+  const wall = DAM_WALL + .25 + Math.abs(dx) * .7;           // нос (0.7) не залезает в штабель
+  if (inChannel(boat.x, boat.z) && boat.x < wall) { boat.x = wall; if (dx < 0) boat.v *= .5; }
 
   { const p = { x: boat.x, z: boat.z }, n = pushOutRocks(p, BOAT_R); if (n) { boat.x = p.x; boat.z = p.z; if (dx * n[0] + dz * n[1] < 0) boat.v *= .55; } }
   // домики стоят намертво — кораблик просто отскакивает
@@ -1296,7 +1308,7 @@ function updateBoat(dt) {
     boat.body.remove(boat.cargo.pop());
     addToStack();
     delivered++;
-    if (delivered >= GOAL) won = true;
+    if (delivered >= GOAL || !logs.length && !boat.cargo.length && !boat.spill.length) won = true;
   }
 
   // кильватер
@@ -1333,14 +1345,15 @@ function followCam(dt) {
   const a = controls.target.dot(LIGHT_R), b = controls.target.dot(LIGHT_U);
   snapT.copy(LIGHT_R).multiplyScalar(Math.round(a / texel) * texel).addScaledVector(LIGHT_U, Math.round(b / texel) * texel);
   sun.target.position.copy(snapT);
+  snapT.addScaledVector(SUN_DIR, controls.target.dot(SUN_DIR));
   sun.position.copy(snapT).addScaledVector(SUN_DIR, 40);
   if (won && drain > .35) {
     const k = sstep(.35, 1, drain) , ease = Math.min(1, 1.2 * dt);
     endTarget.set(mix(boat.x, -8, k), 0, mix(boat.z, 0, k));
     endCam.copy(endTarget).addScaledVector(CAM_OFF, 1 + k * 1.1);
     controls.maxDistance = 90;
-    const sc = sun.shadow.camera, half = 26 * (1 + k * 1.2);
-    if (Math.abs(sc.right - half) > .5) { Object.assign(sc, { left: -half, right: half, top: half, bottom: -half }); sc.updateProjectionMatrix(); }
+    const sc = sun.shadow.camera, half = 58;            // сразу финальный размер — без дрожания на ступеньках
+    if (sc.right !== half) { Object.assign(sc, { left: -half, right: half, top: half, bottom: -half }); sc.updateProjectionMatrix(); }
     controls.target.lerp(endTarget, ease * .5);
     camera.position.lerp(endCam, ease * .5);
     if (drain >= 1 && !outroShown) { outroShown = true; document.getElementById('outro').style.opacity = .85; }
@@ -1353,12 +1366,17 @@ function followCam(dt) {
 }
 
 // ---------- партия ----------
+const disposeTree = g => {
+  g.traverse(o => { if (o !== g && o.geometry && o.geometry !== stackGeo && o.geometry !== logGeo) o.geometry.dispose(); if (o.isInstancedMesh) o.dispose(); });
+  g.clear();
+};
 function newGame() {
+  for (const c of [geoCache, winCache, edgeCache]) { c.forEach(g => g.dispose()); c.clear(); }
   blocks.splice(0).forEach(b => b.dispose());
   logs.splice(0).forEach(l => l.dispose());
-  damGroup.clear(); stack.length = 0;
+  disposeTree(damGroup); stack.length = 0;
   queue.length = 0; timer = 0; figId = 0; frozen = false; settle = 1.5;
-  delivered = 0; won = false; drain = 0; bedGroup.clear(); bed.length = 0;
+  delivered = 0; won = false; drain = 0; disposeTree(bedGroup); bed.length = 0;
   for (const m of [...boat.cargo, ...boat.spill]) boat.body.remove(m);
   Object.assign(boat, { x: BOAT_START.x, z: BOAT_START.z, yaw: Math.PI, v: 0, w: 0, cargo: [], spill: [], tip: 0, roll: 0 });
   wakeU.forEach(w => w.set(0, 0, -100, 0));
@@ -1368,6 +1386,7 @@ function newGame() {
   boat.g.visible = false; bubble.style.opacity = 0; intro.on = false;
   outroShown = false; document.getElementById('outro').style.opacity = 0;
   controls.maxDistance = 46;
+  controls.target.set(BOAT_START.x, 0, BOAT_START.z); camera.position.copy(controls.target).add(CAM_OFF);
   Object.assign(sun.shadow.camera, { left: -26, right: 26, top: 26, bottom: -26 }); sun.shadow.camera.updateProjectionMatrix();
 }
 function freezeCity() {
@@ -1426,8 +1445,10 @@ function revealBed() {
 
 // ---------- ввод ----------
 renderer.domElement.addEventListener('contextmenu', e => e.preventDefault());
+addEventListener('blur', () => { for (const k in keys) keys[k] = false; });
 addEventListener('keydown', e => {
-  keys[e.code] = true;                    // по физическим клавишам — работает в любой раскладке
+  keys[e.code] = true;
+  if (e.repeat) return;                    // по физическим клавишам — работает в любой раскладке
   if (e.code === 'KeyT') postMat.uniforms.uMode.value = (postMat.uniforms.uMode.value + 1) % 2;
   else if (e.code === 'KeyF') follow = !follow;
   else if (e.code === 'BracketLeft') { pixel = Math.max(2, pixel - 1); resize(); }
@@ -1459,7 +1480,6 @@ function frame() {
   for (const b of blocks) b.update(dt);
 
   const fall = 1 - delivered / GOAL;
-  waterMat.uniforms.uFall.value = fall;
   if (won) drain = Math.min(1, drain + dt / 10);
   waterMat.uniforms.uDrain.value = drain;
   revealBed();
@@ -1484,7 +1504,8 @@ function frame() {
   });
   {
     const dx = Math.cos(boat.yaw) * 0.3, dz = -Math.sin(boat.yaw) * 0.3;
-    segU[blocks.length].set(boat.x - dx, boat.z - dz, boat.x + dx, boat.z + dz);
+    if (boat.g.visible) segU[blocks.length].set(boat.x - dx, boat.z - dz, boat.x + dx, boat.z + dz);
+    else segU[blocks.length].set(1e4, 1e4, 1e4, 1e4);
     infoU[blocks.length].set(0.16, -100, 0, 0);
   }
   waterMat.uniforms.uCount.value = blocks.length + 1;
