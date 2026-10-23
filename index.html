@@ -317,9 +317,9 @@ const waterMat = new THREE.ShaderMaterial({
       if(uDrain > 0. && vP.x > ${DAM_X}. + 1.){
         float pn = vnoise(vP*.15) * .7 + vnoise(vP*.5 + 7.) * .3;
         float t = mix(-.05, .62, uDrain);
-        float silt = .006 + .014 * vnoise(vP*2.3 + 31.) + .01 * vnoise(vP*7.1 - 5.);   // сухой ил — лёгкий мелкий дизер
+        float silt = .6 * mix(.00007, .0006, pow(smoothstep(.2, .85, vnoise(vP*.3) * .55 + vnoise(vP*1.1 + 7.) * .3 + vnoise(vP*3.4 - 2.) * .15), 1.4));   // мокрая глина: как земля вокруг, но темнее
         v = pn > t ? mix(silt * uDrain, v, smoothstep(t, t + .06, pn)) : silt * uDrain;
-        v = max(v, ring(pn, t, .006) * .45 * smoothstep(0., .1, uDrain));
+        v = max(v, ring(pn, t, .006) * .3 * smoothstep(0., .1, uDrain));
       }
       v = v < .012 ? 0. : v;              // гамма растра вытягивает даже еле заметное — отсекаем хвосты
       gl_FragColor = vec4(vec3(v), 0.);   // alpha 0 = вода
