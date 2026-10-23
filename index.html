@@ -664,43 +664,18 @@ const through = (c, yaw, len, o) => {
 };
 const stub = (x, z) => bar(x, z, R() * Math.PI, rr(.8, 1.1));
 
+// реальные типологии: одиночный дом либо два дома крест-накрест строго под 90°
 const FIG = {
-  // балки лучей пересекаются не серединой — лучи выходят разной длины
-  star(c) {
-    const n = 3, base = R() * Math.PI;             // больше 3 широких домиков в узле — каша
-    const long = Math.floor(R() * n);
-    return Array.from({ length: n }, (_, i) =>
-      through(c, base + i * Math.PI / n + rr(-.1, .1), i === long ? rr(8, 11) : rr(2.5, 6.5), { sink: .08 + i * .025 }));
-  },
+  single(c) { return [bar(c.x, c.z, R() * Math.PI, rr(2.5, 8))]; },
+  small(c) { return [bar(c.x, c.z, R() * Math.PI, rr(1.2, 2.4))]; },
   cross(c) {
-    const a = R() * Math.PI;
-    return [through(c, a, rr(3.5, 7)), through(c, a + pick([-1, 1]) * rr(.8, 1.4), rr(2.5, 5), { sink: .06 })];
-  },
-  dot(c) { return [stub(c.x, c.z)]; },
-  dots(c) { return Array.from({ length: pick([2, 3, 4]) }, () => stub(c.x + rr(-2, 2), c.z + rr(-2, 2))); },
-  branch(c) {
-    const a = R() * Math.PI, L = rr(8, 11), dx = Math.cos(a), dz = -Math.sin(a);
-    const out = [bar(c.x, c.z, a, L)];
-    for (const side of [-1, 1]) {           // по одной поперечине на каждую половину — не лезут друг на друга
-      const p = { x: c.x + dx * side * rr(.2, .38) * L, z: c.z + dz * side * rr(.2, .38) * L };
-      out.push(through(p, a + pick([-1, 1]) * rr(.8, 1.3), rr(2.5, 4.5), { sink: .06 }));
-    }
-    return out;
-  },
-  bundle(c) {
-    const a = R() * Math.PI, px = Math.sin(a), pz = Math.cos(a), n = pick([2, 3]);
-    return Array.from({ length: n }, (_, i) => {
-      const o = (i - (n - 1) / 2) * rr(.45, .7);
-      return bar(c.x + px * o, c.z + pz * o, a + rr(-.08, .08), rr(2, 5));
-    });
-  },
-  knot(c) {
-    const a = R() * Math.PI, L = rr(2.2, 3.2), sa = R() * 6.28, sd = rr(1.6, 2.2);
-    return [through(c, a, L), through(c, a + pick([-1, 1]) * rr(.8, 1.3), L * rr(.75, 1), { sink: .05 }),
-            stub(c.x + Math.cos(sa) * sd, c.z + Math.sin(sa) * sd)];
+    const a = R() * Math.PI, L1 = rr(4, 9), L2 = rr(3, 6.5);
+    const t1 = rr(-.35, .35) * L1;                      // пересечение смещено — Т, Г или крест
+    const p = { x: c.x + Math.cos(a) * t1, z: c.z - Math.sin(a) * t1 };
+    return [bar(c.x, c.z, a, L1), through(p, a + Math.PI / 2, L2, { sink: .06 })];
   },
 };
-const FIG_MIX = ['star', 'cross', 'cross', 'branch', 'bundle', 'knot', 'knot', 'dot', 'dots'];
+const FIG_MIX = ['single', 'single', 'single', 'small', 'cross', 'cross'];
 
 // очередь появления: блоки фигуры идут по одному
 const queue = [];
