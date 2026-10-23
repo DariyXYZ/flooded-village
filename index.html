@@ -163,12 +163,20 @@ blockMat.onBeforeCompile = blackShadows;
 const windowMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
 // отражение в воде: серое, без контура, рисуется поверх воды, но под всем остальным; чуть дрожит
 const reflU = { uTime: { value: 0 } };
-const reflMat = new THREE.MeshBasicMaterial({ color: 0x5a5a5a, side: THREE.DoubleSide, depthTest: false, depthWrite: false });
+const reflMat = new THREE.MeshBasicMaterial({ color: 0xffffff, side: THREE.DoubleSide, depthTest: false, depthWrite: false });
 reflMat.onBeforeCompile = sh => {
   sh.uniforms.uTime = reflU.uTime;
-  sh.vertexShader = 'uniform float uTime;\n' + sh.vertexShader.replace('#include <project_vertex>',
-    'vec4 wq = modelMatrix * vec4(transformed, 1.); transformed.x += sin(wq.y*9. + uTime*2.2 + wq.z*1.3) * .035 * (-wq.y);\n#include <project_vertex>');
-  sh.fragmentShader = sh.fragmentShader.replace('#include <opaque_fragment>', 'gl_FragColor = vec4(outgoingLight, .3);');
+  sh.vertexShader = 'uniform float uTime; varying vec3 vW; varying float vUp;\n' + sh.vertexShader.replace('#include <project_vertex>',
+    'vec4 wq = modelMatrix * vec4(transformed, 1.); transformed.x += sin(wq.y*9. + uTime*2.2 + wq.z*1.3) * .03 * (-wq.y);\n' +
+    'vW = (modelMatrix * vec4(transformed, 1.)).xyz; vUp = normal.y;\n#include <project_vertex>');
+  // тёмное, тающее с глубиной, порванное горизонтальной рябью; alpha .1 — как вода: плавный растр без контура
+  sh.fragmentShader = 'uniform float uTime; varying vec3 vW; varying float vUp;\n' + sh.fragmentShader.replace('#include <opaque_fragment>', `
+    float l = vUp > .3 ? .13 : vUp < -.3 ? .03 : .065;
+    float d = -vW.y;
+    l *= 1. - .7 * smoothstep(.05, 1.3, d);
+    float rip = fract(vW.y * 9. + sin(vW.x * 1.7 + vW.z * .9 + uTime * 1.2) * .45);
+    l *= mix(.15, 1., step(.32, rip));
+    gl_FragColor = vec4(vec3(l), .1);`);
 };
 // лавка: полосатая крыша (полосы поперёк ската в локальных координатах)
 const shopMat = new THREE.MeshLambertMaterial({ color: 0xffffff, flatShading: true });
