@@ -117,7 +117,7 @@ renderer.shadowMap.type = THREE.BasicShadowMap;   // жёсткие пиксел
 document.body.appendChild(renderer.domElement);
 
 let pixel = 4;              // шаг растра halftone, в физических пикселях
-const rt = new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType });
+const rt = new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType, minFilter: THREE.NearestFilter, magFilter: THREE.NearestFilter });
 
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x000000);
@@ -391,8 +391,9 @@ const postMat = new THREE.ShaderMaterial({
     float b4(vec2 a){ return b2(.5*a)*.25 + b2(a); }
     float b8(vec2 a){ return b4(.5*a)*.25 + b2(a); }
     void main(){
-      vec4 c0 = texture2D(tDiffuse, vUv);
-      float l0 = lum(vUv);
+      vec2 uv = (floor(gl_FragCoord.xy) + .5) * uTexel;   // пиксель в пиксель с экраном — без сдвоенных рядов при ресемпле
+      vec4 c0 = texture2D(tDiffuse, uv);
+      float l0 = lum(uv);
       // три тона на предметах и траве: чёрный, ровный растр, белый.
       // Вода (alpha 0) не квантуется — иначе тонкие круги на пороге мерцают кадр к кадру
       float l = c0.a < .2 ? l0 : l0 < .1 ? 0. : l0 < .62 ? .4 : 1.;
@@ -421,8 +422,8 @@ const postMat = new THREE.ShaderMaterial({
         float e = 0.;
         for(int i=0;i<4;i++){
           vec2 off = i==0?vec2(t.x,0.):i==1?vec2(-t.x,0.):i==2?vec2(0.,t.y):vec2(0.,-t.y);
-          vec4 cn = texture2D(tDiffuse, vUv+off);
-          e = max(e, abs(lum(vUv+off) - l0));
+          vec4 cn = texture2D(tDiffuse, uv+off);
+          e = max(e, abs(lum(uv+off) - l0));
           if(cn.a < .5) e = 1.;
         }
         if(e > .12) o = 0.;
@@ -439,7 +440,7 @@ function resize() {
   const w = innerWidth, h = innerHeight;
   renderer.setSize(w, h);
   camera.aspect = w / h; camera.updateProjectionMatrix();
-  const rw = Math.floor(w * DPR), rh = Math.floor(h * DPR);
+  const db = renderer.getDrawingBufferSize(new THREE.Vector2()), rw = db.x, rh = db.y;   // ровно размер холста
   rt.setSize(rw, rh);
   postMat.uniforms.uTexel.value.set(1 / rw, 1 / rh);
   postMat.uniforms.uCell.value = pixel;
