@@ -54,3 +54,7 @@ git clone https://github.com/DariyXYZ/flooded-village.git
 cd flooded-village
 npx serve .        # or just open index.html
 ```
+
+## For developers & AI agents
+
+See [ARCHITECTURE.md](ARCHITECTURE.md) for how the game is built and the rules that keep it from breaking.
