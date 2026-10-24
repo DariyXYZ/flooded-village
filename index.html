@@ -1428,7 +1428,10 @@ const splash = { on: false, show: false, t: 0, pendingIntro: false, scene: new T
   floor.rotation.x = -Math.PI / 2;
   sc.add(floor);
   // пять брёвен неровной цепочкой, как набросок
-  [[-4.6, .3, .35], [-2.8, .05, -.06], [-.95, .15, -.4], [.95, -.05, .28], [2.8, .1, 0], [4.55, -.1, -.22]].forEach(([x, z, yaw], i) => {
+  // цепочка вдоль горизонтали экрана: камера смотрит чуть сбоку, поэтому раскладываем по её «правому» вектору
+  const fwd = CAM_OFF.clone().negate().setY(0).normalize(), right = new THREE.Vector3(-fwd.z, 0, fwd.x), ry = Math.atan2(-right.z, right.x);
+  [[-4.6, .08, .2], [-2.8, -.04, -.08], [-.95, .05, -.22], [.95, -.03, .16], [2.8, .04, -.04], [4.55, -.05, -.14]].forEach(([u, v, dy], i) => {
+    const x = right.x * u + fwd.x * v, z = right.z * u + fwd.z * v, yaw = ry + dy;
     const len = [1.1, 1.0, .9, 1.05, .8, .95][i];
     const m = new THREE.Mesh(logGeo, blockMat); m.scale.x = len;
     const rp = new THREE.Mesh(new THREE.PlaneGeometry(len + 4, 4), rippleMat.clone());
