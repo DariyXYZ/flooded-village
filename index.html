@@ -1025,7 +1025,7 @@ bushMat.onBeforeCompile = sh => {
 const inPuddle = (x, z, m = 1.15) => pudU.some(p => ((x - p.x) / p.z) ** 2 + ((z - p.y) / p.w) ** 2 < m * m);
 function plantShore() {
   for (let t = 0, n = 0; t < 20000 && n < PUD; t++) {         // лужи
-    const x = rr(-110, 50), z = rr(-42, 42), sd = sdWater(x, z);
+    const x = rr(-125, 70), z = rr(-60, 60), sd = sdWater(x, z);
     if (sd < 2.5 || sd > 18) continue;
     const rx = rr(.8, 3), rz = rr(.6, 2);
     if (pudU.slice(0, n).some(p => Math.hypot(p.x - x, p.y - z) < p.z + rx + 1)) continue;
@@ -1049,8 +1049,8 @@ function plantShore() {
   };
   // сначала места валунов — трава на них не растёт, только вокруг
   const bushSpots = [];
-  for (let t = 0; t < 30000 && bushSpots.length < 260; t++) {
-    const x = rr(-115, 55), z = rr(-44, 44), sd = sdWater(x, z);
+  for (let t = 0; t < 30000 && bushSpots.length < 430; t++) {
+    const x = rr(-130, 75), z = rr(-64, 64), sd = sdWater(x, z);
     if (sd < 1.2 || sd > 16 || inPuddle(x, z, 1.4)) continue;
     if (noise2(x * .18 + 9, z * .18 - 3) < .6 || R() > .5) continue;
     const sc0 = rr(.4, .95);
@@ -1058,7 +1058,7 @@ function plantShore() {
   }
   const onRock = (x, z) => bushSpots.some(b => (x - b.x) ** 2 + (z - b.z) ** 2 < b.r * b.r);
   const CH = 10, DENS = 3.2;
-  for (let cx = -115; cx < 55; cx += CH) for (let cz = -44; cz < 44; cz += CH) {
+  for (let cx = -130; cx < 75; cx += CH) for (let cz = -64; cz < 64; cz += CH) {
     const lists = new Map();
     for (let i = 0; i < CH * CH * DENS; i++) {
       const x = cx + R() * CH, z = cz + R() * CH, sd = sdWater(x, z);
@@ -1096,8 +1096,8 @@ function plantShore() {
     return g;
   });
   const junk = [[stickG, []], ...stoneGs.map(g => [g, []])];
-  for (let t = 0, n = 0; t < 40000 && n < 1400; t++) {
-    const x = rr(-115, 55), z = rr(-44, 44), sd = sdWater(x, z);
+  for (let t = 0, n = 0; t < 40000 && n < 2400; t++) {
+    const x = rr(-130, 75), z = rr(-64, 64), sd = sdWater(x, z);
     if (sd < .15 || sd > 20 || inPuddle(x, z, 1.05)) continue;
     const isStick = R() < .55, slot = isStick ? junk[0] : junk[1 + Math.floor(R() * 3)];
     q.setFromEuler(new THREE.Euler(0, R() * 6.28, isStick ? rr(-.15, .15) : rr(-.3, .3)));
@@ -1415,7 +1415,7 @@ function startSplash() {
 function updateSplash(dt) {
   const s = splash; s.t += dt;
   splash.cam.aspect = camera.aspect; splash.cam.updateProjectionMatrix();
-  splash.cam.position.set(0, 8.6, 9.6); splash.cam.lookAt(0, 0, -.1);
+  splash.cam.position.copy(CAM_OFF); splash.cam.lookAt(0, 0, 0);   // тот же масштаб, что в игре
   for (const l of s.logs) {
     const k = sstep(l.at, l.at + 1.4, s.t), u = l.rp.material.uniforms;
     if (k > 0 && u.uBorn.value < 0) u.uBorn.value = time;   // момент всплытия — расходится волна
