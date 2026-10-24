@@ -1468,8 +1468,9 @@ function updateSplash(dt) {
 }
 
 // ---------- магазин: флажок на лавке, буква S, когда рядом, меню ----------
-const flagGeo = new THREE.PlaneGeometry(.7, .42, 12, 2);
-flagGeo.translate(.35, 0, 0);                     // крепится левым краем к древку
+const FLAG_L = .8;
+const flagGeo = new THREE.PlaneGeometry(FLAG_L, .2, 14, 2);   // длинный треугольный вымпел
+flagGeo.translate(FLAG_L / 2, 0, 0);                     // крепится левым краем к древку
 const flagBase = flagGeo.attributes.position.array.slice();
 function addShopFlag(mesh, len) {
   const top = WALL - .06 + .62 + .15;              // над коньком
@@ -1477,14 +1478,14 @@ function addShopFlag(mesh, len) {
   pole.position.set(len / 2 - .1, top + .45, 0);
   const flag = new THREE.Mesh(flagGeo, new THREE.MeshLambertMaterial({ color: 0xffffff, side: THREE.DoubleSide }));
   flag.material.onBeforeCompile = blackShadows;
-  flag.position.set(len / 2 - .1, top + .82, 0);
+  flag.position.set(len / 2 - .1, top + .88, 0);
   pole.castShadow = flag.castShadow = true;
   mesh.add(pole, flag);
 }
 function waveFlag() {                              // развевается: волна бежит от древка к краю
   const a = flagGeo.attributes.position;
   for (let i = 0; i < a.count; i++) {
-    const x = flagBase[i * 3], y = flagBase[i * 3 + 1], k = x / .7;
+    const x = flagBase[i * 3], k = x / FLAG_L, y = flagBase[i * 3 + 1] * (1 - k * .97);   // сужается к концу
     a.setXYZ(i, x * (1 - .06 * k), y - k * k * .04, Math.sin(time * 6 - x * 11) * .07 * k + Math.sin(time * 3.7 - x * 7) * .03 * k);
   }
   a.needsUpdate = true; flagGeo.computeVertexNormals();
