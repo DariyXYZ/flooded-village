@@ -405,7 +405,13 @@ const postMat = new THREE.ShaderMaterial({
         if(l > .9) o = 1.;
         if(l < .03) o = 0.;
         // совсем тёмные тона воды/земли (1–4%): точка растра меньше пикселя — вместо неё редкий упорядоченный bayer
-        if(c0.a < .2 && l > .004 && l < .045) o = l > b8(floor(gl_FragCoord.xy)) ? 1. : 0.;   // одиночные пиксели
+        // совсем тёмные тона (до ~4%) — одиночные bayer-пиксели; 3.5–8% — плавный переход между bayer и растром,
+        // перемешанный по второй bayer-матрице: без видимого шва
+        if(c0.a < .2 && l > .004 && l < .08){
+          vec2 px = floor(gl_FragCoord.xy);
+          float bay = l > b8(px) ? 1. : 0.;
+          o = b8(px + vec2(5., 3.)) < smoothstep(.035, .08, l) ? o : bay;
+        }
       } else {
         o = l > b8(floor(gl_FragCoord.xy/max(uCell*.5,1.)))*.98+.01 ? 1. : 0.;
       }
@@ -1395,15 +1401,15 @@ const splash = { on: false, show: false, t: 0, pendingIntro: false, scene: new T
   floor.rotation.x = -Math.PI / 2;
   sc.add(floor);
   // пять брёвен неровной цепочкой, как набросок
-  [[-2.5, .25, .35], [-1.25, .05, -.06], [0, .12, -.4], [1.2, -.05, .28], [2.35, .02, 0]].forEach(([x, z, yaw], i) => {
-    const len = [1.1, 1.0, .9, 1.05, .8][i];
+  [[-4.6, .3, .35], [-2.8, .05, -.06], [-.95, .15, -.4], [.95, -.05, .28], [2.8, .1, 0], [4.55, -.1, -.22]].forEach(([x, z, yaw], i) => {
+    const len = [1.1, 1.0, .9, 1.05, .8, .95][i];
     const m = new THREE.Mesh(logGeo, blockMat); m.scale.x = len;
     const rp = new THREE.Mesh(new THREE.PlaneGeometry(len + 4, 4), rippleMat.clone());
     rp.material.uniforms.uLen.value = len; rp.material.uniforms.uSeed.value = i * 17.3;
     rp.rotation.set(-Math.PI / 2, 0, yaw); rp.position.set(x, .004, z);
     m.rotation.y = yaw; m.position.set(x, -.4, z);
     sc.add(m, rp);
-    splash.logs.push({ m, rp, x, z, yaw, at: .6 + i * .45, phase: i * 1.7 });
+    splash.logs.push({ m, rp, x, z, yaw, at: .7 + i * .75, phase: i * 1.7 });
   });
 }
 function startSplash() {
@@ -1424,11 +1430,14 @@ function updateSplash(dt) {
     u.uAmp.value = k; u.uTime.value = time;
   }
   // мир готов (город застыл, брёвна разложены) и все брёвна всплыли — уходим в игру через чёрный кадр
-  if (s.show && frozen && s.t > 5.2 && !s.leaving) {
+  if (s.show && frozen && s.t > 7.6 && !s.leaving) {
     s.leaving = true;
     renderer.compile(scene, camera);                       // шейдеры мира — заранее, без рывка
     const f = document.getElementById('fade'); f.style.opacity = 1;
-    setTimeout(() => { s.show = false; f.style.opacity = 0; setTimeout(() => { s.on = false; s.leaving = false; if (s.pendingIntro) startIntro(); }, 500); }, 550);
+    setTimeout(() => {                                    // в чёрном кадре: сразу ставим камеру на кораблик у дамбы
+      if (s.pendingIntro) { startIntro(); s.pendingIntro = false; }
+      s.show = false; f.style.opacity = 0; setTimeout(() => { s.on = false; s.leaving = false; }, 500);
+    }, 550);
   }
 }
 
