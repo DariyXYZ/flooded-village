@@ -10,6 +10,7 @@
   .ui{position:fixed;color:#fff;font-family:ui-monospace,Consolas,monospace;pointer-events:none;white-space:pre}
   #intro{left:0;right:0;top:18px;text-align:center;font-size:12px;letter-spacing:.12em;opacity:0;transition:opacity 1.2s}
   #bubble{opacity:0;transition:opacity .4s;image-rendering:pixelated}
+  #fade{position:fixed;inset:0;background:#000;opacity:0;pointer-events:none;transition:opacity .5s}
   #outro{left:0;right:0;bottom:9%;text-align:center;font-size:13px;line-height:2.2;letter-spacing:.3em;opacity:0;transition:opacity 3s;text-shadow:0 0 6px #000,0 0 14px #000,0 0 24px #000}
   #outro small{display:block;font-size:10px;letter-spacing:.2em;opacity:.5}
 </style>
@@ -22,6 +23,7 @@
 </head>
 <body>
 <canvas id="bubble" class="ui"></canvas>
+<div id="fade"></div>
 <div id="outro" class="ui">the water is gone · the village rests<small>R — another village</small></div>
 <script type="module">
 import * as THREE from 'three';
@@ -351,10 +353,10 @@ scene.add(water);
 
 // круги вокруг брёвен — маленькие декали, смешиваются через max
 const rippleMat = new THREE.ShaderMaterial({
-  uniforms: { uLen: { value: 1 }, uSeed: { value: 0 }, uTime: { value: 0 } },
+  uniforms: { uLen: { value: 1 }, uSeed: { value: 0 }, uTime: { value: 0 }, uAmp: { value: 1 }, uBorn: { value: -100 } },
   vertexShader: `varying vec2 vL; void main(){ vL = position.xy; gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.); }`,
   fragmentShader: `
-    uniform float uLen, uSeed, uTime;
+    uniform float uLen, uSeed, uTime, uAmp, uBorn;
     varying vec2 vL;
     ${GLSL_NOISE}
     void main(){
@@ -368,7 +370,9 @@ const rippleMat = new THREE.ShaderMaterial({
         float fade = smoothstep(.26, .38, r) * (1. - smoothstep(.45, .66, r));
         c = max(c, ring(d, r, .01) * arc * fade * .7);
       }
-      c *= .34; c = c < .012 ? 0. : c;    // отсекаем хвосты, как у воды — без ореола
+      float age = uTime - uBorn;                    // всплытие: волна расходится от бревна
+      if(age > 0. && age < 3.) c = max(c, ring(d, .05 + age*.45, .01) * exp(-age*1.6) * smoothstep(.4, .7, vnoise(vL*1.7 + uSeed)));
+      c *= .34 * uAmp; c = c < .012 ? 0. : c;    // отсекаем хвосты, как у воды — без ореола
       gl_FragColor = vec4(vec3(c), 0.);
     }`,
   transparent: true, depthWrite: false,
@@ -1381,6 +1385,53 @@ function followCam(dt) {
   camera.position.add(camDelta);
 }
 
+// ---------- заставка: из чёрной воды всплывают брёвна, пока мир строится за кадром ----------
+const splash = { on: false, show: false, t: 0, pendingIntro: false, scene: new THREE.Scene(), cam: new THREE.PerspectiveCamera(28, 1, .1, 100), logs: [] };
+{
+  const sc = splash.scene;
+  const sl = new THREE.DirectionalLight(0xffffff, 3.4); sl.position.copy(SUN_DIR).multiplyScalar(10);
+  sc.add(sl, new THREE.AmbientLight(0xffffff, .14));
+  const floor = new THREE.Mesh(new THREE.PlaneGeometry(80, 80), new THREE.ShaderMaterial({ fragmentShader: 'void main(){ gl_FragColor = vec4(0.); }' }));
+  floor.rotation.x = -Math.PI / 2;
+  sc.add(floor);
+  // пять брёвен неровной цепочкой, как набросок
+  [[-2.5, .25, .35], [-1.25, .05, -.06], [0, .12, -.4], [1.2, -.05, .28], [2.35, .02, 0]].forEach(([x, z, yaw], i) => {
+    const len = [1.1, 1.0, .9, 1.05, .8][i];
+    const m = new THREE.Mesh(logGeo, blockMat); m.scale.x = len;
+    const rp = new THREE.Mesh(new THREE.PlaneGeometry(len + 4, 4), rippleMat.clone());
+    rp.material.uniforms.uLen.value = len; rp.material.uniforms.uSeed.value = i * 17.3;
+    rp.rotation.set(-Math.PI / 2, 0, yaw); rp.position.set(x, .004, z);
+    m.rotation.y = yaw; m.position.set(x, -.4, z);
+    sc.add(m, rp);
+    splash.logs.push({ m, rp, x, z, yaw, at: .6 + i * .45, phase: i * 1.7 });
+  });
+}
+function startSplash() {
+  if (TEST || ENDING) { splash.on = splash.show = false; return; }
+  Object.assign(splash, { on: true, show: true, t: 0, pendingIntro: false });
+  for (const l of splash.logs) { l.m.position.y = -.4; l.rp.material.uniforms.uAmp.value = 0; l.rp.material.uniforms.uBorn.value = -100; }
+  document.getElementById('fade').style.opacity = 0;
+}
+function updateSplash(dt) {
+  const s = splash; s.t += dt;
+  splash.cam.aspect = camera.aspect; splash.cam.updateProjectionMatrix();
+  splash.cam.position.set(0, 8.6, 9.6); splash.cam.lookAt(0, 0, -.1);
+  for (const l of s.logs) {
+    const k = sstep(l.at, l.at + 1.4, s.t), u = l.rp.material.uniforms;
+    if (k > 0 && u.uBorn.value < 0) u.uBorn.value = time;   // момент всплытия — расходится волна
+    l.m.position.y = mix(-.4, .04, k) + Math.sin(time * 1.1 + l.phase) * .02 * k;
+    l.m.rotation.set(0, l.yaw, Math.sin(time * .8 + l.phase) * .03 + (1 - k) * .25);
+    u.uAmp.value = k; u.uTime.value = time;
+  }
+  // мир готов (город застыл, брёвна разложены) и все брёвна всплыли — уходим в игру через чёрный кадр
+  if (s.show && frozen && s.t > 5.2 && !s.leaving) {
+    s.leaving = true;
+    renderer.compile(scene, camera);                       // шейдеры мира — заранее, без рывка
+    const f = document.getElementById('fade'); f.style.opacity = 1;
+    setTimeout(() => { s.show = false; f.style.opacity = 0; setTimeout(() => { s.on = false; s.leaving = false; if (s.pendingIntro) startIntro(); }, 500); }, 550);
+  }
+}
+
 // ---------- партия ----------
 const disposeTree = g => {
   g.traverse(o => { if (o !== g && o.geometry && o.geometry !== stackGeo && o.geometry !== logGeo) o.geometry.dispose(); if (o.isInstancedMesh) o.dispose(); });
@@ -1400,6 +1451,7 @@ function newGame() {
   placeRocks();
   planCity();
   boat.g.visible = false; bubble.style.opacity = 0; intro.on = false;
+  startSplash();
   outroShown = false; document.getElementById('outro').style.opacity = 0;
   controls.maxDistance = 46;
   controls.target.set(BOAT_START.x, 0, BOAT_START.z); camera.position.copy(controls.target).add(CAM_OFF);
@@ -1415,7 +1467,7 @@ function freezeCity() {
     if (ENDING) { won = true; Object.assign(boat, { x: DAM_X + 5, z: -1, yaw: Math.PI * .9, v: 0 }); }
   } else scatterLogs(LOGS);
   layBed();
-  if (TEST || ENDING) boat.g.visible = true; else startIntro();
+  if (TEST || ENDING) boat.g.visible = true; else if (splash.on) splash.pendingIntro = true; else startIntro();
 }
 
 // дно озера: камушки, ветки, мусор — проступают там, где уже сухо
@@ -1529,7 +1581,8 @@ function frame() {
 
   controls.update();
   renderer.setRenderTarget(rt);
-  renderer.render(scene, camera);
+  if (splash.on) updateSplash(dt);
+  renderer.render(splash.show ? splash.scene : scene, splash.show ? splash.cam : camera);
   renderer.setRenderTarget(null);
   renderer.render(postScene, postCam);
   requestAnimationFrame(frame);

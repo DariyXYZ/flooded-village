@@ -56,6 +56,8 @@ Sections are marked `// ---------- name ----------`. Top to bottom:
 
 ```
 load ──► newGame()
+          │  startSplash(): splash.scene (black water, 5 logs surfacing) is rendered
+          │  instead of the world; the world keeps simulating behind it
           │  city queue filled (planCity), boat hidden
           ▼
      BUILDING  (frozen = false)
@@ -65,7 +67,8 @@ load ──► newGame()
      freezeCity()  → frozen = true, houses never move again
           │  scatterLogs(100)  (or ?test / ?ending setup)
           │  layBed()  (hidden lakebed debris)
-          │  startIntro()  (or boat shown directly in test modes)
+          │  splash ends when frozen && splash.t > 5.2 → black fade → world → startIntro()
+          │  (test modes skip splash and intro)
           ▼
      INTRO  (intro.on)  autopilot from dam → east, 4 bubbles, player input ignored
           ▼
