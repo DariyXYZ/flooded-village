@@ -137,7 +137,7 @@ const SUN_DIR = new THREE.Vector3(-6, 9, -3).normalize();
 sun.position.copy(SUN_DIR).multiplyScalar(40);
 sun.castShadow = true;
 sun.shadow.mapSize.set(4096, 4096);   // на финальном плане рамка теней расширяется (endShadow)
-Object.assign(sun.shadow.camera, { left: -26, right: 26, top: 26, bottom: -26, near: 1, far: 90 });
+Object.assign(sun.shadow.camera, { left: -54, right: 54, top: 54, bottom: -54, near: 1, far: 160 });   // накрывает весь кадр — край теней за экраном
 sun.shadow.bias = -0.0015;
 sun.shadow.normalBias = 0.05;
 scene.add(sun, sun.target);
@@ -1183,12 +1183,12 @@ const bubble = document.getElementById('bubble'), bubbleP = new THREE.Vector3();
 // бабл рисуется в маленьком канвасе и растягивается без сглаживания: кривая форма, пиксельный шрифт с засечками
 function drawBubble(text) {
   const S = 2 / (devicePixelRatio || 1), ctx = bubble.getContext('2d');   // 1 пиксель бабла = 2 физических, как мелкий шаг растра
-  const FONT = '13px "Courier New", Courier, monospace';   // моноширинная слэб-антиква: засечки и одна толщина штриха
+  const FONT = '16px "Courier New", Courier, monospace', SX = .68;   // слэб-антиква одной толщины, сжатая по ширине — высокая и узкая
   ctx.font = FONT;
   // форма — мягкая «подушка» (суперэллипс) с плавной кривизной по шуму: без изломов, но каждый раз своя
   const rnd = (a, b) => a + Math.random() * (b - a);
   const pad = rnd(14, 19), tail = rnd(9, 14);
-  const tw = Math.ceil(ctx.measureText(text).width), w = tw + pad * 2, h = rnd(24, 30);
+  const tw = Math.ceil(ctx.measureText(text).width * SX), w = tw + pad * 2, h = rnd(24, 30);
   const M = 7, W = Math.ceil(w + M * 2), H = Math.ceil(h + tail + M * 2);
   bubble.width = W; bubble.height = H;
   bubble.style.width = W * S + 'px'; bubble.style.height = H * S + 'px';
@@ -1216,7 +1216,7 @@ function drawBubble(text) {
   ctx.fillStyle = '#fff'; ctx.fill();
   ctx.fillStyle = '#000'; ctx.textBaseline = 'middle';
   ctx.font = FONT;
-  ctx.fillText(text, x0 + pad, y0 + h / 2 + 1);
+  ctx.save(); ctx.translate(x0 + pad, y0 + h / 2 + 1); ctx.scale(SX, 1); ctx.fillText(text, 0, 0); ctx.restore();
   const im = ctx.getImageData(0, 0, W, H), d = im.data;   // жёсткий порог: ни одного серого пикселя
   for (let i = 0; i < d.length; i += 4) {
     const on = d[i + 3] > 110, white = d[i] > 225;   // любой след чернил — чёрный пиксель, тонкие штрихи не теряются; порог чёрного — тонкие штрихи и засечки
@@ -1372,13 +1372,13 @@ function followCam(dt) {
   snapT.copy(LIGHT_R).multiplyScalar(Math.round(a / texel) * texel).addScaledVector(LIGHT_U, Math.round(b / texel) * texel);
   sun.target.position.copy(snapT);
   snapT.addScaledVector(SUN_DIR, controls.target.dot(SUN_DIR));
-  sun.position.copy(snapT).addScaledVector(SUN_DIR, 40);
+  sun.position.copy(snapT).addScaledVector(SUN_DIR, 70);
   if (won && drain > .35) {
     const k = sstep(.35, 1, drain) , ease = Math.min(1, 1.2 * dt);
     endTarget.set(mix(boat.x, -8, k), 0, mix(boat.z, 0, k));
     endCam.copy(endTarget).addScaledVector(CAM_OFF, 1 + k * 1.1);
     controls.maxDistance = 90;
-    const sc = sun.shadow.camera, half = 58;            // сразу финальный размер — без дрожания на ступеньках
+    const sc = sun.shadow.camera, half = 80;            // сразу финальный размер — без дрожания на ступеньках
     if (sc.right !== half) { Object.assign(sc, { left: -half, right: half, top: half, bottom: -half }); sc.updateProjectionMatrix(); }
     controls.target.lerp(endTarget, ease * .5);
     camera.position.lerp(endCam, ease * .5);
@@ -1464,7 +1464,7 @@ function newGame() {
   outroShown = false; document.getElementById('outro').style.opacity = 0;
   controls.maxDistance = 46;
   controls.target.set(BOAT_START.x, 0, BOAT_START.z); camera.position.copy(controls.target).add(CAM_OFF);
-  Object.assign(sun.shadow.camera, { left: -26, right: 26, top: 26, bottom: -26 }); sun.shadow.camera.updateProjectionMatrix();
+  Object.assign(sun.shadow.camera, { left: -54, right: 54, top: 54, bottom: -54 }); sun.shadow.camera.updateProjectionMatrix();
 }
 function freezeCity() {
   frozen = true;
