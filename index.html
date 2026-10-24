@@ -10,6 +10,20 @@
   .ui{position:fixed;color:#fff;font-family:ui-monospace,Consolas,monospace;pointer-events:none;white-space:pre}
   #intro{left:0;right:0;top:18px;text-align:center;font-size:12px;letter-spacing:.12em;opacity:0;transition:opacity 1.2s}
   #bubble{opacity:0;transition:opacity .4s;image-rendering:pixelated}
+  #shopKey{opacity:0;transition:opacity .25s;image-rendering:pixelated;transform:translate(-50%,-100%);pointer-events:auto;cursor:pointer}
+  #shop{position:fixed;inset:0;display:none;align-items:center;justify-content:center;background:rgba(0,0,0,.82);color:#fff;font-family:"Courier New",Courier,monospace}
+  #shop.on{display:flex}
+  #shop .box{display:flex;flex-direction:column;gap:22px;align-items:center;padding:16px}
+  #shop .t{font-size:22px;letter-spacing:.06em;transform:scaleX(.68)}
+  #shop .row{display:flex;gap:18px;flex-wrap:wrap;justify-content:center}
+  #shop .card{width:180px;border:2px solid #fff;padding:14px 12px 12px;display:flex;flex-direction:column;gap:10px;cursor:pointer;background:#000}
+  #shop .card:hover,#shop .card.sel{background:#fff;color:#000}
+  #shop .card i{display:block;height:70px;border:1px dashed currentColor;opacity:.6}
+  #shop .card b,#shop .card s,#shop .card u{display:block;transform:scaleX(.7);transform-origin:left;text-decoration:none;font-weight:normal;white-space:nowrap}
+  #shop .card b{font-size:17px}
+  #shop .card s{font-size:13px;opacity:.75}
+  #shop .card u{font-size:15px;margin-top:4px}
+  #shop .h{font-size:12px;opacity:.6;transform:scaleX(.7)}
   #fade{position:fixed;inset:0;background:#000;opacity:0;pointer-events:none;transition:opacity .5s}
   #outro{left:0;right:0;bottom:9%;text-align:center;font-size:13px;line-height:2.2;letter-spacing:.3em;opacity:0;transition:opacity 3s;text-shadow:0 0 6px #000,0 0 14px #000,0 0 24px #000}
   #outro small{display:block;font-size:10px;letter-spacing:.2em;opacity:.5}
@@ -23,6 +37,16 @@
 </head>
 <body>
 <canvas id="bubble" class="ui"></canvas>
+<canvas id="shopKey" class="ui"></canvas>
+<div id="shop"><div class="box">
+  <div class="t">shop</div>
+  <div class="row">
+    <div class="card"><i></i><b>bigger deck</b><s>+1 log on board</s><u>20 logs</u></div>
+    <div class="card"><i></i><b>stronger engine</b><s>+20% speed</s><u>30 logs</u></div>
+    <div class="card"><i></i><b>steady keel</b><s>less sway when loaded</s><u>25 logs</u></div>
+  </div>
+  <div class="h">E / esc — close</div>
+</div></div>
 <div id="fade"></div>
 <div id="outro" class="ui">the water is gone · the village rests<small>R — another village</small></div>
 <script type="module">
@@ -570,6 +594,7 @@ class Block {
     scene.add(this.refl, this.reflMask);
     this.baseY = -s.sink * 0.15;          // почти не тонут, лишь касаются воды
     this.mesh.add(new THREE.Mesh(windowGeo(s.len, s.shop ? 1 : Math.floor(R() * WIN_TYPES)), windowMat));
+    if (this.shop) addShopFlag(this.mesh, s.len);
     this.g.add(this.mesh);
     scene.add(this.g);
     this.sync();
@@ -1270,7 +1295,7 @@ function spillOne(m) {
 }
 
 function updateBoat(dt) {
-  const tipping = boat.tip > 0 || won || intro.on, load = boat.cargo.length;
+  const tipping = boat.tip > 0 || won || intro.on || shopUI.open, load = boat.cargo.length;
   if (!tipping) {                         // гружёный идёт тяжелее
     if (keys.KeyW) boat.v = Math.min(6.4 * (1 - load * .06), boat.v + 5.2 * (1 - load * .08) * dt);
     if (keys.KeyS) boat.v *= Math.exp(-4 * dt);
@@ -1442,6 +1467,61 @@ function updateSplash(dt) {
   }
 }
 
+// ---------- магазин: флажок на лавке, буква S, когда рядом, меню ----------
+const flagGeo = new THREE.PlaneGeometry(.7, .42, 12, 2);
+flagGeo.translate(.35, 0, 0);                     // крепится левым краем к древку
+const flagBase = flagGeo.attributes.position.array.slice();
+function addShopFlag(mesh, len) {
+  const top = WALL - .06 + .62 + .15;              // над коньком
+  const pole = new THREE.Mesh(new THREE.CylinderGeometry(.04, .045, 1.1, 6), blockMat);
+  pole.position.set(len / 2 - .1, top + .45, 0);
+  const flag = new THREE.Mesh(flagGeo, new THREE.MeshLambertMaterial({ color: 0xffffff, side: THREE.DoubleSide }));
+  flag.material.onBeforeCompile = blackShadows;
+  flag.position.set(len / 2 - .1, top + .82, 0);
+  pole.castShadow = flag.castShadow = true;
+  mesh.add(pole, flag);
+}
+function waveFlag() {                              // развевается: волна бежит от древка к краю
+  const a = flagGeo.attributes.position;
+  for (let i = 0; i < a.count; i++) {
+    const x = flagBase[i * 3], y = flagBase[i * 3 + 1], k = x / .7;
+    a.setXYZ(i, x * (1 - .06 * k), y - k * k * .04, Math.sin(time * 6 - x * 11) * .07 * k + Math.sin(time * 3.7 - x * 7) * .03 * k);
+  }
+  a.needsUpdate = true; flagGeo.computeVertexNormals();
+}
+const shopUI = { near: false, open: false };
+const shopKey = document.getElementById('shopKey'), shopEl = document.getElementById('shop'), shopP = new THREE.Vector3();
+{
+  const S = 3 / (devicePixelRatio || 1), ctx = shopKey.getContext('2d'), W = 22, H = 24;
+  shopKey.width = W; shopKey.height = H; shopKey.style.width = W * S + 'px'; shopKey.style.height = H * S + 'px';
+  ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.roundRect(2, 2, W - 4, H - 7, 5); ctx.fill();
+  ctx.beginPath(); ctx.moveTo(W / 2 - 3, H - 6); ctx.lineTo(W / 2, H - 1); ctx.lineTo(W / 2 + 3, H - 6); ctx.fill();
+  ctx.fillStyle = '#000'; ctx.font = '16px "Courier New", Courier, monospace'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.save(); ctx.translate(W / 2, H / 2 - 1); ctx.scale(.8, 1); ctx.fillText('S', 0, 1); ctx.restore();
+  const im = ctx.getImageData(0, 0, W, H), d = im.data;
+  for (let i = 0; i < d.length; i += 4) { const on = d[i + 3] > 110, wh = d[i] > 225; d[i] = d[i + 1] = d[i + 2] = on && wh ? 255 : 0; d[i + 3] = on ? 255 : 0; }
+  ctx.putImageData(im, 0, 0);
+}
+shopKey.addEventListener('click', () => shopUI.near && openShop());
+shopEl.addEventListener('click', e => { if (e.target === shopEl) closeShop(); });
+shopEl.querySelectorAll('.card').forEach(c => c.addEventListener('click', () => {
+  shopEl.querySelectorAll('.card').forEach(o => o.classList.remove('sel')); c.classList.add('sel');   // покупка — пока заглушка
+}));
+function openShop() { shopUI.open = true; shopEl.classList.add('on'); shopKey.style.opacity = 0; }
+function closeShop() { shopUI.open = false; shopEl.classList.remove('on'); }
+function updateShop() {
+  waveFlag();
+  const sh = blocks.find(b => b.shop);
+  shopUI.near = !!sh && boat.g.visible && !intro.on && !won && !shopUI.open && Math.hypot(sh.x - boat.x, sh.z - boat.z) < 3.4;
+  shopKey.style.opacity = shopUI.near ? 1 : 0;
+  shopKey.style.pointerEvents = shopUI.near ? 'auto' : 'none';
+  if (sh) {
+    shopP.set(sh.x, 2.9, sh.z).project(camera);
+    shopKey.style.left = ((shopP.x + 1) / 2 * innerWidth) + 'px';
+    shopKey.style.top = ((1 - shopP.y) / 2 * innerHeight) + 'px';
+  }
+}
+
 // ---------- партия ----------
 const disposeTree = g => {
   g.traverse(o => { if (o !== g && o.geometry && o.geometry !== stackGeo && o.geometry !== logGeo) o.geometry.dispose(); if (o.isInstancedMesh) o.dispose(); });
@@ -1460,7 +1540,7 @@ function newGame() {
   buildDamRuins();
   placeRocks();
   planCity();
-  boat.g.visible = false; bubble.style.opacity = 0; intro.on = false;
+  boat.g.visible = false; bubble.style.opacity = 0; intro.on = false; closeShop();
   startSplash();
   outroShown = false; document.getElementById('outro').style.opacity = 0;
   controls.maxDistance = 46;
@@ -1526,7 +1606,9 @@ renderer.domElement.addEventListener('contextmenu', e => e.preventDefault());
 addEventListener('blur', () => { for (const k in keys) keys[k] = false; });
 addEventListener('keydown', e => {
   keys[e.code] = true;
-  if (e.repeat) return;                    // по физическим клавишам — работает в любой раскладке
+  if (e.repeat) return;
+  if (shopUI.open) { if (e.code === 'KeyE' || e.code === 'Escape' || e.code === 'Enter') closeShop(); return; }
+  if ((e.code === 'KeyE' || e.code === 'Enter') && shopUI.near) { openShop(); return; }                    // по физическим клавишам — работает в любой раскладке
   if (e.code === 'KeyT') postMat.uniforms.uMode.value = (postMat.uniforms.uMode.value + 1) % 2;
   else if (e.code === 'KeyF') follow = !follow;
   else if (e.code === 'BracketLeft') { pixel = Math.max(2, pixel - 1); resize(); }
@@ -1571,6 +1653,7 @@ function frame() {
     a.x -= dx * f; a.z -= dz * f; b.x += dx * f; b.z += dz * f;
   }
   updateIntro(dt);
+  updateShop(dt);
   updateBoat(dt);
   reflU.uTime.value = time;
   followCam(dt);

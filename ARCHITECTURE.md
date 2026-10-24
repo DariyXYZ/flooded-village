@@ -209,4 +209,4 @@ Each house has `refl` (EdgesGeometry line segments, mirrored `scale.y = −1`) a
 
 - Water fragment shader is heavy (~1–1.5k ALU/px at DPR 2). Option: render `rt` at DPR 1.
 - ~300 draw calls for logs, their ripple decals and the dam stack — could be instanced.
-- The shop is a placeholder (no UI yet).
+- Shop: flag (`addShopFlag`, animated in `waveFlag`), `S` badge when the boat is within 3.4 of the shop, menu `#shop` (E/Enter/click opens, E/Esc closes, boat frozen while open). Cards are placeholders — purchases do nothing yet.
