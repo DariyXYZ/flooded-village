@@ -45,7 +45,7 @@
     <div class="card"><i></i><b>stronger engine</b><s>+20% speed</s><u>30 logs</u></div>
     <div class="card"><i></i><b>steady keel</b><s>less sway when loaded</s><u>25 logs</u></div>
   </div>
-  <div class="h">E / esc — close</div>
+  <div class="h">S / esc — close</div>
 </div></div>
 <div id="fade"></div>
 <div id="outro" class="ui">the water is gone · the village rests<small>R — another village</small></div>
@@ -1607,8 +1607,8 @@ addEventListener('blur', () => { for (const k in keys) keys[k] = false; });
 addEventListener('keydown', e => {
   keys[e.code] = true;
   if (e.repeat) return;
-  if (shopUI.open) { if (e.code === 'KeyE' || e.code === 'Escape' || e.code === 'Enter') closeShop(); return; }
-  if ((e.code === 'KeyE' || e.code === 'Enter') && shopUI.near) { openShop(); return; }                    // по физическим клавишам — работает в любой раскладке
+  if (shopUI.open) { if (e.code === 'KeyS' || e.code === 'KeyE' || e.code === 'Escape' || e.code === 'Enter') closeShop(); return; }
+  if ((e.code === 'KeyS' || e.code === 'KeyE' || e.code === 'Enter') && shopUI.near) { keys.KeyS = false; openShop(); return; }   // у лавки S открывает магазин, в остальных местах — тормоз                    // по физическим клавишам — работает в любой раскладке
   if (e.code === 'KeyT') postMat.uniforms.uMode.value = (postMat.uniforms.uMode.value + 1) % 2;
   else if (e.code === 'KeyF') follow = !follow;
   else if (e.code === 'BracketLeft') { pixel = Math.max(2, pixel - 1); resize(); }
