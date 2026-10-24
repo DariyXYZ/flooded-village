@@ -1183,7 +1183,7 @@ const bubble = document.getElementById('bubble'), bubbleP = new THREE.Vector3();
 // бабл рисуется в маленьком канвасе и растягивается без сглаживания: кривая форма, пиксельный шрифт с засечками
 function drawBubble(text) {
   const S = 2 / (devicePixelRatio || 1), ctx = bubble.getContext('2d');   // 1 пиксель бабла = 2 физических, как мелкий шаг растра
-  const FONT = '13px "Times New Roman", Times, serif';
+  const FONT = '13px "Courier New", Courier, monospace';   // моноширинная слэб-антиква: засечки и одна толщина штриха
   ctx.font = FONT;
   // форма — мягкая «подушка» (суперэллипс) с плавной кривизной по шуму: без изломов, но каждый раз своя
   const rnd = (a, b) => a + Math.random() * (b - a);
