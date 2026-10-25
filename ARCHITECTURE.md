@@ -189,7 +189,7 @@ Each house has `refl` (EdgesGeometry line segments, mirrored `scale.y = −1`) a
 4. **Everything created per game is disposed in `newGame()`** (`disposeTree`, cache clears). Don't `group.clear()` without disposing geometry. Don't dispose shared geometries (`stackGeo`, `logGeo`, `houseGeo` cache is cleared deliberately).
 5. **Shadow snapping in `followCam()`** stays in place.
 6. **Dark tones:** avoid large areas sitting on the 0.03 / 0.045 thresholds; remember gamma.
-7. **No text in the HUD** except the intro bubbles and the outro line — the design is intentionally wordless.
+7. **Minimal HUD text:** intro bubbles, outro line, the `n / 100` tag over the dam, the coin wallet over the boat (E) and the `+N` coin pop-ups. All are pixel canvases thresholded to pure black/white (`crisp`) — no grey, no DOM text in the world view.
 8. **Camera is fixed at 45°** (`enableRotate = false`); the world is only built for that view.
 9. Keyboard uses `e.code`; ignore `e.repeat` for one-shot actions; clear keys on `blur`.
 10. Keep it a single file with no build step.
@@ -209,4 +209,6 @@ Each house has `refl` (EdgesGeometry line segments, mirrored `scale.y = −1`) a
 
 - Water fragment shader is heavy (~1–1.5k ALU/px at DPR 2). Option: render `rt` at DPR 1.
 - ~300 draw calls for logs, their ripple decals and the dam stack — could be instanced.
-- Shop: flag (`addShopFlag`, animated in `waveFlag`), `S` badge when the boat is within 3.4 of the shop, menu `#shop` (S near the shop — or E/Enter/click — opens; S/Esc closes; elsewhere S is the brake, boat frozen while open). Cards are placeholders — purchases do nothing yet.
+- Shop: flag (`addShopFlag`, animated in `waveFlag`), `S` badge when the boat is within 3.4 of the shop, menu `#shop` (S/E/Enter/click near the shop opens; A/D choose, W/Enter/Space/click buy, S/E/Esc close; elsewhere S is the brake and E shows the wallet; boat frozen while open).
+- Economy: `coins` (+100–150 per unloaded log, `spawnCoin` pop-up), `upg` = `{deck, engine, straps}`; `cap()` = `CAP` + deck; engine ×1.2 speed/accel; straps skip pickup when the deck is full. Both reset in `newGame()` via `resetShop()` / `resetTags()`. `DECK` has a 7th slot for the deck-upgrade capsize.
+- Tickets (`SHOP_ITEMS`, `drawBody`, `drawStub`): body canvas (art drawn in grey → `dither()` 4×4 Bayer, then text → `crisp(…, 200)`) + stub canvas below the perforation. Purchase → stub gets `.torn` (CSS `tear` keyframes), then `.gone`; body redraws with a SOLD stamp. Ticket pixel scale `shopK` = integer physical px, fitted to the viewport.

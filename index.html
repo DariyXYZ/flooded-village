@@ -11,20 +11,22 @@
   #intro{left:0;right:0;top:18px;text-align:center;font-size:12px;letter-spacing:.12em;opacity:0;transition:opacity 1.2s}
   #bubble{opacity:0;transition:opacity .4s;image-rendering:pixelated}
   #shopKey{opacity:0;transition:opacity .25s;image-rendering:pixelated;transform:translate(-50%,-100%);pointer-events:auto;cursor:pointer}
-  #shop{position:fixed;inset:0;display:none;align-items:center;justify-content:center;background:rgba(0,0,0,.82);color:#fff;font-family:"Courier New",Courier,monospace}
+  #shop{position:fixed;inset:0;display:none;align-items:center;justify-content:center;background:rgba(0,0,0,.86);color:#fff;font-family:"Courier New",Courier,monospace}
   #shop.on{display:flex}
-  #shop .box{display:flex;flex-direction:column;gap:22px;align-items:center;padding:16px}
-  #shop .t{font-size:22px;letter-spacing:.06em;transform:scaleX(.68)}
-  #shop .row{display:flex;gap:18px;flex-wrap:wrap;justify-content:center}
-  #shop .card{width:180px;border:2px solid #fff;padding:14px 12px 12px;display:flex;flex-direction:column;gap:10px;cursor:pointer;background:#000}
-  #shop .card:hover,#shop .card.sel{background:#fff;color:#000}
-  #shop .card i{display:block;height:70px;border:1px dashed currentColor;opacity:.6}
-  #shop .card b,#shop .card s,#shop .card u{display:block;transform:scaleX(.7);transform-origin:left;text-decoration:none;font-weight:normal;white-space:nowrap}
-  #shop .card s{white-space:normal;width:142%;line-height:1.3}
-  #shop .card b{font-size:17px}
-  #shop .card s{font-size:13px;opacity:.75}
-  #shop .card u{font-size:15px;margin-top:4px}
+  #shop .box{display:flex;flex-direction:column;gap:18px;align-items:center;padding:16px}
+  #shop canvas{display:block;image-rendering:pixelated}
+  #shop .row{display:flex;flex-wrap:wrap;justify-content:center;align-items:flex-start}
+  #shop .ticket{margin-top:10px;transition:margin .12s;cursor:pointer}
+  #shop .ticket.sel{margin-top:0;margin-bottom:10px}
+  #shop .ticket.no{animation:no .3s}
+  #shop .stub{transform-origin:0 0}
+  #shop .stub.torn{animation:tear .9s ease-in forwards}
+  #shop .stub.gone{visibility:hidden}
+  @keyframes tear{0%{transform:none}22%{transform:rotate(6deg)}36%{transform:translate(3px,5px) rotate(9deg)}100%{transform:translate(40px,320px) rotate(38deg);opacity:0}}
+  @keyframes no{0%,100%{transform:none}25%{transform:translateX(-6px)}75%{transform:translateX(6px)}}
   #shop .h{font-size:12px;opacity:.6;transform:scaleX(.7)}
+  .tag{opacity:0;transition:opacity .3s;image-rendering:pixelated;transform:translate(-50%,-100%)}
+  #fx canvas{position:fixed;image-rendering:pixelated}
   #fade{position:fixed;inset:0;background:#000;opacity:0;pointer-events:none;transition:opacity .5s}
   #outro{left:0;right:0;bottom:9%;text-align:center;font-size:13px;line-height:2.2;letter-spacing:.3em;opacity:0;transition:opacity 3s;text-shadow:0 0 6px #000,0 0 14px #000,0 0 24px #000}
   #outro small{display:block;font-size:10px;letter-spacing:.2em;opacity:.5}
@@ -39,14 +41,13 @@
 <body>
 <canvas id="bubble" class="ui"></canvas>
 <canvas id="shopKey" class="ui"></canvas>
+<canvas id="damTag" class="ui tag"></canvas>
+<canvas id="wallet" class="ui tag"></canvas>
+<div id="fx"></div>
 <div id="shop"><div class="box">
-  <div class="t">shop</div>
-  <div class="row">
-    <div class="card"><i></i><b>bigger deck</b><s>+1 log on board</s><u>20 logs</u></div>
-    <div class="card"><i></i><b>stronger engine</b><s>+20% speed</s><u>30 logs</u></div>
-    <div class="card"><i></i><b>cargo straps</b><s>full deck: extra logs are skipped, no capsize</s><u>25 logs</u></div>
-  </div>
-  <div class="h">S / esc — close</div>
+  <canvas id="shopHead"></canvas>
+  <div class="row"></div>
+  <div class="h">A D — choose · W — buy · S / esc — close</div>
 </div></div>
 <div id="fade"></div>
 <div id="outro" class="ui">the water is gone · the village rests<small>R — another village</small></div>
@@ -1191,12 +1192,14 @@ const boat = { x: 0, z: 0, yaw: 0, v: 0, w: 0, g: new THREE.Group(), body: new T
   scene.add(boat.g);
 }
 // брёвна поперёк палубы перед рубкой, в натуральную величину, торчат за борта: три внизу, два на них, шестое — на макушку
-const DECK = [[.24, .25, 0], [.07, .25, 0], [-.1, .25, 0], [.155, .41, 0], [-.015, .41, 0], [.07, .57, 0]];
+const DECK = [[.24, .25, 0], [.07, .25, 0], [-.1, .25, 0], [.155, .41, 0], [-.015, .41, 0], [.07, .57, 0], [.07, .73, 0]];   // седьмое — только с большой палубой, и сразу переворот
 
 const keys = {};
 addEventListener('keyup', e => { keys[e.code] = false; });
 
 let delivered = 0, won = false, drain = 0;
+let coins = 0, upg = {};     // монеты за сданные брёвна и купленные улучшения (deck / engine / straps)
+const cap = () => CAP + (upg.deck ? 1 : 0);
 // вступление: корабль медленно плывёт от дамбы к городу, на 4 точках — реплики
 const INTRO_LINES = [
   'the dam could not hold the floods',
@@ -1298,7 +1301,8 @@ function spillOne(m) {
 function updateBoat(dt) {
   const tipping = boat.tip > 0 || won || intro.on || shopUI.open, load = boat.cargo.length;
   if (!tipping) {                         // гружёный идёт тяжелее
-    if (keys.KeyW) boat.v = Math.min(6.4 * (1 - load * .06), boat.v + 5.2 * (1 - load * .08) * dt);
+    const eng = upg.engine ? 1.2 : 1;
+    if (keys.KeyW) boat.v = Math.min(6.4 * eng * (1 - load * .06), boat.v + 5.2 * eng * (1 - load * .08) * dt);
     if (keys.KeyS) boat.v *= Math.exp(-4 * dt);
   } else if (!intro.on) boat.v *= Math.exp(-1.2 * dt);
   boat.v *= Math.exp(-0.35 * dt);
@@ -1340,6 +1344,7 @@ function updateBoat(dt) {
     for (let i = logs.length - 1; i >= 0; i--) {
       const l = logs[i];
       if (l.noPick > 0) continue;
+      if (upg.straps && boat.cargo.length >= cap()) break;   // ремни: полная палуба — лишнее бревно остаётся в воде
       const q = ptSeg(boat, { x: l.x - l.dx * l.len / 2, z: l.z - l.dz * l.len / 2 }, { x: l.x + l.dx * l.len / 2, z: l.z + l.dz * l.len / 2 });
       if (Math.hypot(q.x - boat.x, q.z - boat.z) > 0.75) continue;
       l.dispose(); logs.splice(i, 1);
@@ -1351,7 +1356,7 @@ function updateBoat(dt) {
       m.castShadow = m.receiveShadow = true;
       boat.body.add(m);
       boat.cargo.push(m);
-      if (boat.cargo.length > CAP) { capsize(); break; }
+      if (boat.cargo.length > cap()) { capsize(); break; }
     }
   }
 
@@ -1361,6 +1366,8 @@ function updateBoat(dt) {
     boat.body.remove(boat.cargo.pop());
     addToStack();
     delivered++;
+    const pay = 100 + Math.floor(Math.random() * 51);   // 100–150 монет за бревно
+    coins += pay; spawnCoin(pay);
     if (delivered >= GOAL || !logs.length && !boat.cargo.length && !boat.spill.length) won = true;
   }
 
@@ -1494,8 +1501,52 @@ function waveFlag() {                              // развевается: в
   }
   a.needsUpdate = true; flagGeo.computeVertexNormals();
 }
-const shopUI = { near: false, open: false };
+const shopUI = { near: false, open: false, sel: 0 };
 const shopKey = document.getElementById('shopKey'), shopEl = document.getElementById('shop'), shopP = new THREE.Vector3();
+
+// ---------- пиксельный UI: маленькие канвасы без сглаживания, жёсткий порог или дизеринг Байера ----------
+const BAYER = [0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5];
+function crisp(ctx, W, H, thr = 225) {            // ни одного серого пикселя: чернила — чёрные, бумага — белая; thr выше — штрих жирнее
+  const im = ctx.getImageData(0, 0, W, H), d = im.data;
+  for (let i = 0; i < d.length; i += 4) { const on = d[i + 3] > 110, wh = d[i] > thr; d[i] = d[i + 1] = d[i + 2] = on && wh ? 255 : 0; d[i + 3] = on ? 255 : 0; }
+  ctx.putImageData(im, 0, 0);
+}
+function dither(ctx, x, y, w, h) {                // полутона картинки → точки 4×4 Байера
+  const im = ctx.getImageData(x, y, w, h), d = im.data;
+  for (let i = 0, p = 0; i < d.length; i += 4, p++) {
+    const px = p % w + x, py = Math.floor(p / w) + y;
+    const v = d[i] > (BAYER[(py & 3) * 4 + (px & 3)] + .5) * 16 ? 255 : 0;
+    d[i] = d[i + 1] = d[i + 2] = v; d[i + 3] = 255;
+  }
+  ctx.putImageData(im, x, y);
+}
+function pxSize(c, W, H, k) {                    // k — физических пикселей на пиксель канваса
+  const S = k / (devicePixelRatio || 1);
+  c.width = W; c.height = H; c.style.width = W * S + 'px'; c.style.height = H * S + 'px';
+}
+const FONT = (n, b) => `${b ? 'bold ' : ''}${n}px "Courier New", Courier, monospace`;
+function pxText(ctx, t, x, y, n, { b = false, sx = .7, color = '#000' } = {}) {
+  ctx.font = FONT(n, b); ctx.fillStyle = color; ctx.textBaseline = 'middle';
+  ctx.save(); ctx.translate(x, y); ctx.scale(sx, 1); ctx.fillText(t, 0, 0); ctx.restore();
+  return ctx.measureText(t).width * sx;
+}
+const COIN = ['..#####..', '.#ooooo#.', '#oo###oo#', '#o#ooo#o#', '#o#ooo#o#', '#o#ooo#o#', '#oo###oo#', '.#ooooo#.', '..#####..'];
+function sprite(ctx, rows, x, y, ink = '#000', paper = '#fff') {
+  rows.forEach((r, j) => [...r].forEach((ch, i) => { if (ch !== '.') { ctx.fillStyle = ch === '#' ? ink : paper; ctx.fillRect(x + i, y + j, 1, 1); } }));
+}
+// плашка как у буквы S: белая подушка, чёрный текст, по желанию монетка и хвостик вниз
+function drawTag(c, text, { coin = false, tail = true, k = 2 } = {}) {
+  const ctx = c.getContext('2d');
+  ctx.font = FONT(14);
+  const tw = Math.ceil(ctx.measureText(text).width * .72), cw = coin ? 13 : 0, W = tw + cw + 14, H = tail ? 24 : 19;
+  pxSize(c, W, H, k);
+  ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.roundRect(1, 1, W - 2, 17, 5); ctx.fill();
+  if (tail) { ctx.beginPath(); ctx.moveTo(W / 2 - 3, 17); ctx.lineTo(W / 2, 22); ctx.lineTo(W / 2 + 3, 17); ctx.fill(); }
+  pxText(ctx, text, 7 + cw, 10, 14, { sx: .72 });
+  crisp(ctx, W, H);
+  if (coin) sprite(ctx, COIN, 7, 5);
+}
+
 {
   const S = 3 / (devicePixelRatio || 1), ctx = shopKey.getContext('2d'), W = 22, H = 24;
   shopKey.width = W; shopKey.height = H; shopKey.style.width = W * S + 'px'; shopKey.style.height = H * S + 'px';
@@ -1503,17 +1554,202 @@ const shopKey = document.getElementById('shopKey'), shopEl = document.getElement
   ctx.beginPath(); ctx.moveTo(W / 2 - 3, H - 6); ctx.lineTo(W / 2, H - 1); ctx.lineTo(W / 2 + 3, H - 6); ctx.fill();
   ctx.fillStyle = '#000'; ctx.font = '16px "Courier New", Courier, monospace'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
   ctx.save(); ctx.translate(W / 2, H / 2 - 1); ctx.scale(.8, 1); ctx.fillText('S', 0, 1); ctx.restore();
-  const im = ctx.getImageData(0, 0, W, H), d = im.data;
-  for (let i = 0; i < d.length; i += 4) { const on = d[i + 3] > 110, wh = d[i] > 225; d[i] = d[i + 1] = d[i + 2] = on && wh ? 255 : 0; d[i + 3] = on ? 255 : 0; }
-  ctx.putImageData(im, 0, 0);
+  ctx.textAlign = 'left';
+  crisp(ctx, W, H);
+}
+
+// ---------- картинки на билетах: рисуем в сером, потом дизерим ----------
+const srand = s => () => (s = s * 16807 % 2147483647) / 2147483647;
+function artNight(ctx, w, h, hz, seed) {         // ночное небо со звёздами и вода штрихами
+  const r = srand(seed), g = ctx.createLinearGradient(0, 0, 0, hz);
+  g.addColorStop(0, '#000'); g.addColorStop(1, '#3c3c3c');
+  ctx.fillStyle = g; ctx.fillRect(0, 0, w, hz);
+  ctx.fillStyle = '#fff';
+  for (let i = 0; i < 22; i++) ctx.fillRect(r() * w | 0, r() * hz * .85 | 0, 1, 1);
+  for (let i = 0; i < 3; i++) { const x = r() * w | 0, y = 3 + r() * hz * .6 | 0; ctx.fillRect(x - 2, y, 5, 1); ctx.fillRect(x, y - 2, 1, 5); }
+  ctx.fillStyle = '#060606'; ctx.fillRect(0, hz, w, h - hz);
+  for (let y = hz + 2; y < h; y += 3) for (let n = 0; n < 3; n++) {
+    ctx.fillStyle = `rgba(255,255,255,${.22 + .3 * (y - hz) / (h - hz)})`;
+    ctx.fillRect(r() * w | 0, y, 4 + r() * 16 | 0, 1);
+  }
+}
+function comet(ctx, x0, y0, x1, y1) {
+  const g = ctx.createLinearGradient(x0, y0, x1, y1);
+  g.addColorStop(0, 'rgba(255,255,255,0)'); g.addColorStop(1, '#fff');
+  ctx.strokeStyle = g; ctx.lineWidth = 3; ctx.lineCap = 'round';
+  ctx.beginPath(); ctx.moveTo(x0, y0); ctx.lineTo(x1, y1); ctx.stroke();
+  ctx.fillStyle = '#fff'; ctx.fillRect(x1 - 3, y1, 7, 1); ctx.fillRect(x1, y1 - 3, 1, 7);
+}
+function logEnd(ctx, x, y, r, ghost) {           // торец бревна
+  ctx.lineWidth = 1; ctx.strokeStyle = ghost ? '#fff' : '#000';
+  ctx.beginPath(); ctx.arc(x, y, r, 0, 6.29);
+  if (ghost) { ctx.setLineDash([2, 2]); ctx.stroke(); ctx.setLineDash([]); return; }
+  ctx.fillStyle = '#f2f2f2'; ctx.fill(); ctx.stroke();
+  ctx.strokeStyle = '#8a8a8a'; ctx.beginPath(); ctx.arc(x, y, r * .55, 0, 6.29); ctx.stroke();
+  ctx.fillStyle = '#555'; ctx.fillRect(Math.round(x) - 1, Math.round(y) - 1, 2, 2);
+}
+function pile(ctx, cx, base, r, n, ghost = 0) {  // штабель торцами: 3 внизу, 2, 1 — как на палубе
+  const st = r * 2.05;
+  for (let k = 0; k < n + ghost; k++) {
+    const j = k < 3 ? 0 : k < 5 ? 1 : 2, i = k < 3 ? k : k < 5 ? k - 3 : 0;
+    logEnd(ctx, cx + (i - (2 - j) / 2) * st, base - r - j * st * .86, r, k >= n);
+  }
+}
+function artBoat(ctx, cx, wy, s, n, ghost) {    // кораблик сбоку: корпус, рубка-домик на корме, брёвна торцами
+  ctx.lineWidth = 1; ctx.strokeStyle = '#000';
+  ctx.fillStyle = 'rgba(255,255,255,.35)'; ctx.fillRect(cx - 20 * s, wy + 4 * s, 42 * s, 2);   // отражение
+  const g = ctx.createLinearGradient(0, wy - 6 * s, 0, wy + 4 * s);
+  g.addColorStop(0, '#fff'); g.addColorStop(1, '#6a6a6a');
+  ctx.beginPath(); ctx.moveTo(cx - 24 * s, wy - 5 * s); ctx.lineTo(cx + 22 * s, wy - 5 * s); ctx.lineTo(cx + 30 * s, wy - 10 * s);
+  ctx.lineTo(cx + 24 * s, wy + 4 * s); ctx.lineTo(cx - 21 * s, wy + 4 * s); ctx.closePath();
+  ctx.fillStyle = g; ctx.fill(); ctx.stroke();
+  ctx.fillStyle = '#e6e6e6'; ctx.fillRect(cx - 21 * s, wy - 15 * s, 12 * s, 10 * s); ctx.strokeRect(cx - 21 * s, wy - 15 * s, 12 * s, 10 * s);
+  ctx.beginPath(); ctx.moveTo(cx - 23 * s, wy - 15 * s); ctx.lineTo(cx - 15 * s, wy - 21 * s); ctx.lineTo(cx - 7 * s, wy - 15 * s); ctx.closePath();
+  ctx.fillStyle = '#9a9a9a'; ctx.fill(); ctx.stroke();
+  ctx.fillStyle = '#000'; ctx.fillRect(cx - 17 * s, wy - 12 * s, 3 * s, 3 * s);
+  if (n + ghost) pile(ctx, cx + 6 * s, wy - 5 * s, 3.4 * s, n, ghost);
+}
+const SHOP_ITEMS = [
+  { id: 'deck', name: 'BIGGER DECK', desc: '+1 log on board', key: 'LOAD', val: '+1', price: 1500, seed: 11,
+    art(ctx, w, h) {
+      artNight(ctx, w, h, 56, this.seed); comet(ctx, 10, 6, 46, 26);
+      artBoat(ctx, w * .5, 62, 1.45, 5, 1);
+      pxText(ctx, '+1', w * .5 + 22, 20, 11, { b: true, color: '#fff' });
+    } },
+  { id: 'engine', name: 'STRONGER ENGINE', desc: '+20% speed', key: 'SPEED', val: '+20%', price: 2400, seed: 23,
+    art(ctx, w, h) {
+      artNight(ctx, w, h, 54, this.seed);
+      ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(22, 18, 8, 0, 6.29); ctx.fill();   // месяц
+      ctx.fillStyle = '#000'; ctx.beginPath(); ctx.arc(26, 15, 7, 0, 6.29); ctx.fill();
+      const cx = w * .62, wy = 60, s = 1.2;
+      for (let i = 0; i < 7; i++) {               // линии скорости
+        const y = wy - 22 + i * 4, x0 = 4 + (i * 7) % 13, x1 = cx - 26 * s - (i % 3) * 5, g = ctx.createLinearGradient(x0, 0, x1, 0);
+        g.addColorStop(0, 'rgba(255,255,255,0)'); g.addColorStop(1, '#fff');
+        ctx.fillStyle = g; ctx.fillRect(x0, y, x1 - x0, 1);
+      }
+      ctx.fillStyle = 'rgba(255,255,255,.7)';      // пена за кормой
+      ctx.beginPath(); ctx.moveTo(cx - 22 * s, wy + 2); ctx.lineTo(cx - 52 * s, wy + 9); ctx.lineTo(cx - 52 * s, wy + 4); ctx.closePath(); ctx.fill();
+      artBoat(ctx, cx, wy, s, 2, 0);
+      ctx.fillStyle = '#fff'; for (let i = 0; i < 6; i++) ctx.fillRect(cx + 32 * s + (i % 3) * 3, wy - 6 - (i * 5) % 9, 1, 1);   // брызги у носа
+    } },
+  { id: 'straps', name: 'CARGO STRAPS', desc: 'no capsize: extra logs stay in the water', key: 'SAFE', val: 'YES', price: 1200, seed: 37,
+    art(ctx, w, h) {
+      artNight(ctx, w, h, 66, this.seed);
+      const cx = w / 2, base = 70, r = 11, st = r * 2.05;
+      pile(ctx, cx, base, r, 6);
+      ctx.save(); ctx.beginPath();                 // ремни крест-накрест — только поверх брёвен
+      [[0, 0], [-1, 0], [1, 0], [-.5, 1], [.5, 1], [0, 2]].forEach(([i, j]) => { const x = cx + i * st, y = base - r - j * st * .86; ctx.moveTo(x + r, y); ctx.arc(x, y, r, 0, 6.29); });
+      ctx.clip();
+      const straps = () => { ctx.beginPath(); ctx.moveTo(cx - 34, base - 52); ctx.lineTo(cx + 26, base + 4); ctx.moveTo(cx + 34, base - 52); ctx.lineTo(cx - 26, base + 4); ctx.stroke(); };
+      ctx.strokeStyle = '#000'; ctx.lineWidth = 5; straps();
+      ctx.strokeStyle = '#9a9a9a'; ctx.lineWidth = 1; ctx.setLineDash([2, 2]); straps();
+      ctx.restore(); ctx.setLineDash([]);
+      ctx.fillStyle = '#fff'; ctx.fillRect(cx - 5, base - 33, 10, 8);   // пряжка
+      ctx.strokeStyle = '#000'; ctx.lineWidth = 1; ctx.strokeRect(cx - 4.5, base - 32.5, 9, 7); ctx.fillStyle = '#000'; ctx.fillRect(cx - 1, base - 31, 2, 4);
+    } },
+];
+
+// ---------- билеты магазина: тело с картинкой и корешок по линии перфорации ----------
+const TW = 124, BODY_H = 138, STUB_H = 54;
+const shopRow = shopEl.querySelector('.row'), shopHead = document.getElementById('shopHead');
+let shopK = 2;
+function cutEdge(ctx, y, w, holes) {             // зубчики по краю или дырочки перфорации — вырезаем из бумаги
+  ctx.globalCompositeOperation = 'destination-out'; ctx.fillStyle = '#000';
+  for (let x = holes ? 11 : 6; x < w - 4; x += holes ? 6 : 10) { ctx.beginPath(); ctx.arc(x, y, holes ? 1.6 : 3, 0, 6.29); ctx.fill(); }
+  ctx.globalCompositeOperation = 'source-over';
+}
+function sideNotch(ctx, y, w) {                  // полукруглые вырезы по бокам на линии отрыва
+  ctx.globalCompositeOperation = 'destination-out';
+  for (const x of [0, w]) { ctx.beginPath(); ctx.arc(x, y, 6, 0, 6.29); ctx.fill(); }
+  ctx.globalCompositeOperation = 'source-over';
+}
+function wrap(ctx, text, max) {
+  const out = []; let line = '';
+  for (const w of text.split(' ')) { const t = line ? line + ' ' + w : w; if (ctx.measureText(t).width * .7 > max && line) { out.push(line); line = w; } else line = t; }
+  return out.concat(line);
+}
+function drawBody(it) {
+  const c = it.body, ctx = c.getContext('2d'), owned = !!upg[it.id];
+  pxSize(c, TW, BODY_H, shopK);
+  ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, TW, BODY_H);
+  cutEdge(ctx, 0, TW); cutEdge(ctx, BODY_H, TW, true); sideNotch(ctx, BODY_H, TW);
+  const ax = 8, ay = 9, aw = TW - 16, ah = 78;
+  ctx.fillStyle = '#000'; ctx.fillRect(ax - 2, ay - 2, aw + 4, ah + 4);
+  ctx.save(); ctx.translate(ax, ay); ctx.beginPath(); ctx.rect(0, 0, aw, ah); ctx.clip(); it.art(ctx, aw, ah); ctx.restore();
+  dither(ctx, ax, ay, aw, ah);
+  pxText(ctx, it.name, 7, 99, 13, { b: true, sx: .62 });
+  ctx.font = FONT(10); wrap(ctx, it.desc, TW - 14).slice(0, 2).forEach((l, i) => pxText(ctx, l, 7, 111 + i * 10, 10));
+  ctx.fillStyle = '#000'; for (let x = 7; x < TW - 7; x += 4) ctx.fillRect(x, 130, 2, 1);   // пунктир
+  if (owned) {                                   // штамп «продано» поверх картинки
+    ctx.save(); ctx.translate(TW / 2, 48); ctx.rotate(-.18);
+    ctx.fillStyle = '#000'; ctx.fillRect(-31, -12, 62, 24); ctx.fillStyle = '#fff'; ctx.fillRect(-29, -10, 58, 20);
+    ctx.fillStyle = '#000'; ctx.fillRect(-27, -8, 54, 16);
+    pxText(ctx, 'SOLD', -19, 1, 16, { b: true, sx: .8, color: '#fff' });
+    ctx.restore();
+  }
+  crisp(ctx, TW, BODY_H, 200);
+  sprite(ctx, COIN, TW - 16, 95);
+}
+function drawStub(it, no) {
+  const c = it.stub, ctx = c.getContext('2d'), poor = coins < it.price;
+  pxSize(c, TW, STUB_H, shopK);
+  ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, TW, STUB_H);
+  cutEdge(ctx, 0, TW, true); sideNotch(ctx, 0, TW); cutEdge(ctx, STUB_H, TW);
+  const col = [8, 46, 84];
+  [['NO. :', String(no + 1).padStart(2, '0')], [it.key + ' :', it.val], ['PRICE :', String(it.price)]].forEach(([a, b], i) => {
+    pxText(ctx, a, col[i], 10, 11); pxText(ctx, b, col[i], 21, 12);
+  });
+  pxText(ctx, 'DOCK :', col[0], 33, 11); pxText(ctx, 'SHOP', col[0], 43, 12);
+  pxText(ctx, 'STATUS :', col[1], 33, 11); pxText(ctx, poor ? 'NEED ' + (it.price - coins) : 'READY', col[1], 43, 12);
+  crisp(ctx, TW, STUB_H, 200);
+}
+SHOP_ITEMS.forEach((it, i) => {
+  it.el = document.createElement('div'); it.el.className = 'ticket';
+  it.body = document.createElement('canvas'); it.stub = document.createElement('canvas'); it.stub.className = 'stub';
+  it.el.append(it.body, it.stub); shopRow.append(it.el);
+  it.el.addEventListener('mouseenter', () => selectTicket(i));
+  it.el.addEventListener('click', () => buy(i));
+  it.el.addEventListener('animationend', e => {
+    if (e.animationName === 'tear') { it.stub.classList.remove('torn'); it.stub.classList.add('gone'); }
+    if (e.animationName === 'no') it.el.classList.remove('no');
+  });
+});
+function selectTicket(i) {
+  shopUI.sel = (i + SHOP_ITEMS.length) % SHOP_ITEMS.length;
+  SHOP_ITEMS.forEach((it, j) => it.el.classList.toggle('sel', j === shopUI.sel));
+}
+function drawShop() {
+  const dpr = devicePixelRatio || 1;
+  const fit = Math.min((innerWidth - 48) / (3 * TW + 16), (innerHeight - 140) / (BODY_H + STUB_H)) * dpr;
+  shopK = Math.max(1, Math.min(Math.floor(fit), Math.round(2 * dpr)));
+  shopRow.style.gap = 8 * shopK / dpr + 'px';
+  SHOP_ITEMS.forEach((it, i) => {
+    drawBody(it); drawStub(it, i);
+    if (!it.stub.classList.contains('torn')) it.stub.classList.toggle('gone', !!upg[it.id]);
+    it.el.style.cursor = upg[it.id] ? 'default' : 'pointer';
+  });
+  drawTag(shopHead, String(coins), { coin: true, tail: false, k: shopK });
+}
+function buy(i) {
+  const it = SHOP_ITEMS[i];
+  selectTicket(i);
+  if (upg[it.id]) return;
+  if (coins < it.price) { it.el.classList.remove('no'); void it.el.offsetWidth; it.el.classList.add('no'); return; }
+  coins -= it.price; upg[it.id] = true;
+  it.stub.classList.add('torn');                // корешок отрывается и падает
+  it.el.style.cursor = 'default';
+  SHOP_ITEMS.forEach((o, j) => { if (o !== it) drawStub(o, j); });
+  drawTag(shopHead, String(coins), { coin: true, tail: false, k: shopK });
+  setTimeout(() => { if (upg[it.id]) drawBody(it); }, 260);   // штамп — когда корешок уже оторван
 }
 shopKey.addEventListener('click', () => shopUI.near && openShop());
-shopEl.addEventListener('click', e => { if (e.target === shopEl) closeShop(); });
-shopEl.querySelectorAll('.card').forEach(c => c.addEventListener('click', () => {
-  shopEl.querySelectorAll('.card').forEach(o => o.classList.remove('sel')); c.classList.add('sel');   // покупка — пока заглушка
-}));
-function openShop() { shopUI.open = true; shopEl.classList.add('on'); shopKey.style.opacity = 0; }
+shopEl.addEventListener('click', e => { if (e.target === shopEl || e.target.classList.contains('box')) closeShop(); });
+function openShop() { shopUI.open = true; drawShop(); selectTicket(shopUI.sel); shopEl.classList.add('on'); shopKey.style.opacity = 0; }
 function closeShop() { shopUI.open = false; shopEl.classList.remove('on'); }
+function resetShop() {
+  coins = 0; upg = {}; shopUI.sel = 0;
+  SHOP_ITEMS.forEach(it => it.stub.classList.remove('torn', 'gone'));
+}
 function updateShop() {
   waveFlag();
   const sh = blocks.find(b => b.shop);
@@ -1525,6 +1761,61 @@ function updateShop() {
     shopKey.style.left = ((shopP.x + 1) / 2 * innerWidth) + 'px';
     shopKey.style.top = ((1 - shopP.y) / 2 * innerHeight) + 'px';
   }
+}
+
+// ---------- счётчик над дамбой, кошелёк над корабликом (E), монетки при сдаче ----------
+const damTag = document.getElementById('damTag'), walletEl = document.getElementById('wallet'), fxEl = document.getElementById('fx');
+const tagP = new THREE.Vector3(), wallet = { t: 0, shown: -1 }, coinFx = [];
+let damShown = -1;
+const toScreen = (el, x, y, z, keep) => {        // keep — не уходить за край экрана
+  tagP.set(x, y, z).project(camera);
+  let sx = (tagP.x + 1) / 2 * innerWidth, sy = (1 - tagP.y) / 2 * innerHeight;
+  if (keep) {
+    const w = el.offsetWidth / 2 + 8;
+    sx = Math.min(innerWidth - w, Math.max(w, sx)); sy = Math.min(innerHeight - 8, Math.max(el.offsetHeight + 8, sy));
+  }
+  el.style.left = sx + 'px'; el.style.top = sy + 'px';
+};
+function showWallet() { wallet.t = 2.6; }
+function spawnCoin(pay) {
+  const coin = document.createElement('canvas'), label = document.createElement('canvas');
+  pxSize(coin, 9, 9, 3); sprite(coin.getContext('2d'), COIN, 0, 0);
+  const ctx = label.getContext('2d'), t = '+' + pay;
+  ctx.font = FONT(15, true);
+  const W = Math.ceil(ctx.measureText(t).width * .72) + 6, H = 18;
+  pxSize(label, W, H, 2);
+  for (const [dx, dy] of [[-1, 0], [1, 0], [0, -1], [0, 1], [-1, -1], [1, 1], [-1, 1], [1, -1]]) pxText(ctx, t, 3 + dx, 9 + dy, 15, { b: true, sx: .72 });   // чёрная обводка
+  crisp(ctx, W, H);
+  pxText(ctx, t, 3, 9, 15, { b: true, sx: .72, color: '#fff' });
+  crisp(ctx, W, H, 120);                       // белые штрихи — пожирнее, чтобы читались на воде
+  fxEl.append(coin, label);
+  coinFx.push({ coin, label, t: 0, off: rr(-14, 14) });
+}
+const COIN_SPIN = [1, .75, .35, .75];                  // монетка крутится ступеньками — по-пиксельному
+function updateTags(dt) {
+  const play = boat.g.visible && !splash.show && !won;
+  if (play && delivered !== damShown) { damShown = delivered; drawTag(damTag, `${delivered} / ${GOAL}`); }
+  damTag.style.opacity = play ? 1 : 0;
+  toScreen(damTag, DAM_X + .7, 2.4, 0, true);
+  wallet.t -= dt;
+  const wOn = wallet.t > 0 && play;
+  if (wOn && wallet.shown !== coins) { wallet.shown = coins; drawTag(walletEl, String(coins), { coin: true }); }
+  walletEl.style.opacity = wOn ? 1 : 0;
+  toScreen(walletEl, boat.x, 2.1, boat.z);
+  for (let i = coinFx.length - 1; i >= 0; i--) {
+    const f = coinFx[i];
+    if ((f.t += dt) > 1.2 || !play) { f.coin.remove(); f.label.remove(); coinFx.splice(i, 1); continue; }
+    tagP.set(boat.x, 1.1, boat.z).project(camera);
+    const x = (tagP.x + 1) / 2 * innerWidth + f.off, y = (1 - tagP.y) / 2 * innerHeight - 56 * (1 - (1 - Math.min(1, f.t / .9)) ** 2);
+    const vis = f.t < .85 || Math.floor(f.t * 18) % 2 ? '' : 'hidden';   // в конце мигает и пропадает
+    Object.assign(f.coin.style, { left: x + 'px', top: y + 'px', visibility: vis,
+      transform: `translate(-100%,-50%) scaleX(${COIN_SPIN[Math.floor(f.t / .07) % 4]})` });
+    Object.assign(f.label.style, { left: x + 3 + 'px', top: y + 'px', visibility: vis, transform: 'translateY(-50%)' });
+  }
+}
+function resetTags() {
+  wallet.t = 0; wallet.shown = -1; damShown = -1;
+  coinFx.splice(0).forEach(f => { f.coin.remove(); f.label.remove(); });
 }
 
 // ---------- партия ----------
@@ -1545,7 +1836,7 @@ function newGame() {
   buildDamRuins();
   placeRocks();
   planCity();
-  boat.g.visible = false; bubble.style.opacity = 0; intro.on = false; closeShop();
+  boat.g.visible = false; bubble.style.opacity = 0; intro.on = false; closeShop(); resetShop(); resetTags();
   startSplash();
   outroShown = false; document.getElementById('outro').style.opacity = 0;
   controls.maxDistance = 46;
@@ -1612,10 +1903,17 @@ addEventListener('blur', () => { for (const k in keys) keys[k] = false; });
 addEventListener('keydown', e => {
   keys[e.code] = true;
   if (e.repeat) return;
-  if (shopUI.open) { if (e.code === 'KeyS' || e.code === 'KeyE' || e.code === 'Escape' || e.code === 'Enter') closeShop(); return; }
+  if (shopUI.open) {                                  // в магазине: A/D — выбор билета, W/Enter/пробел — купить, S/E/Esc — закрыть
+    if (e.code === 'KeyA' || e.code === 'ArrowLeft') selectTicket(shopUI.sel - 1);
+    else if (e.code === 'KeyD' || e.code === 'ArrowRight') selectTicket(shopUI.sel + 1);
+    else if (e.code === 'KeyW' || e.code === 'ArrowUp' || e.code === 'Enter' || e.code === 'Space') buy(shopUI.sel);
+    else if (e.code === 'KeyS' || e.code === 'KeyE' || e.code === 'Escape') closeShop();
+    return;
+  }
   if ((e.code === 'KeyS' || e.code === 'KeyE' || e.code === 'Enter') && shopUI.near) { keys.KeyS = false; openShop(); return; }   // у лавки S открывает магазин, в остальных местах — тормоз                    // по физическим клавишам — работает в любой раскладке
   if (e.code === 'KeyT') postMat.uniforms.uMode.value = (postMat.uniforms.uMode.value + 1) % 2;
   else if (e.code === 'KeyF') follow = !follow;
+  else if (e.code === 'KeyE') showWallet();
   else if (e.code === 'BracketLeft') { pixel = Math.max(2, pixel - 1); resize(); }
   else if (e.code === 'BracketRight') { pixel = Math.min(10, pixel + 1); resize(); }
   else if (e.code === 'KeyR') newGame();
@@ -1662,6 +1960,7 @@ function frame() {
   updateBoat(dt);
   reflU.uTime.value = time;
   followCam(dt);
+  updateTags(dt);
 
   blocks.forEach((b, i) => {
     const [a1, a2] = b.ends();
