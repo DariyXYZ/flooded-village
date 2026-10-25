@@ -1345,7 +1345,7 @@ function updateBoat(dt) {
     for (let i = logs.length - 1; i >= 0; i--) {
       const l = logs[i];
       if (l.noPick > 0) continue;
-      if (upg.straps && boat.cargo.length >= cap()) break;   // ремни: полная палуба — лишнее бревно остаётся в воде
+      if (upg.chains && boat.cargo.length >= cap()) break;   // цепи: полная палуба — лишнее бревно остаётся в воде
       const q = ptSeg(boat, { x: l.x - l.dx * l.len / 2, z: l.z - l.dz * l.len / 2 }, { x: l.x + l.dx * l.len / 2, z: l.z + l.dz * l.len / 2 });
       if (Math.hypot(q.x - boat.x, q.z - boat.z) > 0.75) continue;
       l.dispose(); logs.splice(i, 1);
@@ -1525,29 +1525,54 @@ function pxSize(c, W, H, k) {                    // k — физических �
   const S = k / (devicePixelRatio || 1);
   c.width = W; c.height = H; c.style.width = W * S + 'px'; c.style.height = H * S + 'px';
 }
-const FONT = (n, b) => `${b ? 'bold ' : ''}${n}px "Courier New", Courier, monospace`;
-function pxText(ctx, t, x, y, n, { b = false, sx = .7, color = '#000' } = {}) {
-  ctx.font = FONT(n, b); ctx.fillStyle = color; ctx.textBaseline = 'middle';
-  ctx.save(); ctx.translate(x, y); ctx.scale(sx, 1); ctx.fillText(t, 0, 0); ctx.restore();
-  return ctx.measureText(t).width * sx;
+// пиксельный шрифт 7 строк с засечками — узкий, «как Times Condensed»; рисуется по клеткам, без порогов и каши
+const GLYPHS = Object.fromEntries(Object.entries({
+  A: '..#../.#.#./#...#/#...#/#####/#...#/##.##', B: '####./.#..#/.#..#/.###./.#..#/.#..#/####.',
+  C: '.####/#...#/#..../#..../#..../#...#/.###.', D: '####./.#..#/.#..#/.#..#/.#..#/.#..#/####.',
+  E: '#####/.#..#/.#.../.###./.#.../.#..#/#####', F: '#####/.#..#/.#.../.###./.#.../.#.../###..',
+  G: '.####/#...#/#..../#.###/#...#/#...#/.###.', H: '##.##/#...#/#...#/#####/#...#/#...#/##.##',
+  I: '###/.#./.#./.#./.#./.#./###', J: '..###/...#./...#./...#./#..#./#..#./.##..',
+  K: '##.##/.#.#./.##../.##../.#.#./.#..#/##.##', L: '###../.#.../.#.../.#.../.#.../.#..#/#####',
+  M: '##.##/##.##/#.#.#/#.#.#/#...#/#...#/##.##', N: '#...#/##..#/##..#/#.#.#/#..##/#..##/#...#',
+  O: '.###./#...#/#...#/#...#/#...#/#...#/.###.', P: '####./.#..#/.#..#/.###./.#.../.#.../###..',
+  Q: '.###./#...#/#...#/#...#/#.#.#/#..#./.##.#', R: '####./.#..#/.#..#/.###./.#.#./.#..#/##.##',
+  S: '.####/#...#/#..../.###./....#/#...#/####.', T: '#####/#.#.#/..#../..#../..#../..#../.###.',
+  U: '##.##/#...#/#...#/#...#/#...#/#...#/.###.', V: '##.##/#...#/#...#/.#.#./.#.#./.#.#./..#..',
+  W: '##.##/#...#/#...#/#.#.#/#.#.#/##.##/#...#', X: '##.##/.#.#./.#.#./..#../.#.#./.#.#./##.##',
+  Y: '##.##/#...#/.#.#./..#../..#../..#../.###.', Z: '#####/#...#/...#./..#../.#.../#...#/#####',
+  0: '.##./#..#/#..#/#..#/#..#/#..#/.##.', 1: '.#./##./.#./.#./.#./.#./###',
+  2: '.##./#..#/...#/..#./.#../#.../####', 3: '###./...#/...#/.##./...#/...#/###.',
+  4: '..#./.##./#.#./#.#./####/..#./.###', 5: '####/#.../###./...#/...#/#..#/.##.',
+  6: '.##./#.../#.../###./#..#/#..#/.##.', 7: '####/#..#/...#/..#./..#./.#../.#..',
+  8: '.##./#..#/#..#/.##./#..#/#..#/.##.', 9: '.##./#..#/#..#/.###/...#/...#/.##.',
+  ' ': '../../../../../../..', '+': '...../..#../..#../#####/..#../..#../.....', '-': '..../..../..../####/..../..../....',
+  '%': '##..#/##..#/...#./..#../.#.../#..##/#..##', ':': './#/./././#/.', '.': './././././#/#', '/': '...#/...#/..#./..#./.#../.#../#...',
+}).map(([k, v]) => [k, v.split('/')]));
+const pxW = (t, bold) => [...t.toUpperCase()].reduce((w, ch) => w + (GLYPHS[ch] || GLYPHS[' '])[0].length + 1 + (bold ? 1 : 0), -1);
+function pxDraw(ctx, t, x, y, { sy = 1, bold = false, color = '#000' } = {}) {   // y — верх строки; sy=2 — высокие узкие буквы
+  ctx.fillStyle = color;
+  for (const ch of t.toUpperCase()) {
+    const g = GLYPHS[ch] || GLYPHS[' '];
+    g.forEach((r, j) => [...r].forEach((p, i) => { if (p === '#') ctx.fillRect(x + i, y + j * sy, bold ? 2 : 1, sy); }));
+    x += g[0].length + 1 + (bold ? 1 : 0);
+  }
+  return x;
 }
-const COIN = ['..#####..', '.#ooooo#.', '#oo###oo#', '#o#ooo#o#', '#o#ooo#o#', '#o#ooo#o#', '#oo###oo#', '.#ooooo#.', '..#####..'];
+// монета-мон: круглая, с квадратной дыркой — как у старых японских монет
+const COIN = ['..#####..', '.#ooooo#.', '#ooooooo#', '#oo###oo#', '#oo#.#oo#', '#oo###oo#', '#ooooooo#', '.#ooooo#.', '..#####..'];
 function sprite(ctx, rows, x, y, ink = '#000', paper = '#fff') {
   rows.forEach((r, j) => [...r].forEach((ch, i) => { if (ch !== '.') { ctx.fillStyle = ch === '#' ? ink : paper; ctx.fillRect(x + i, y + j, 1, 1); } }));
 }
-// плашка как у буквы S: белая подушка, чёрный текст, по желанию монетка и хвостик вниз
+// плашка с суммой: белая подушка, монета и число высоким пиксельным шрифтом, по желанию хвостик вниз
 function drawTag(c, text, { coin = false, tail = true, k = 2 } = {}) {
-  const ctx = c.getContext('2d');
-  ctx.font = FONT(14);
-  const tw = Math.ceil(ctx.measureText(text).width * .72), cw = coin ? 13 : 0, W = tw + cw + 14, H = tail ? 24 : 19;
+  const ctx = c.getContext('2d'), cw = coin ? 13 : 0, W = pxW(text, true) + cw + 14, H = tail ? 27 : 22;
   pxSize(c, W, H, k);
-  ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.roundRect(1, 1, W - 2, 17, 5); ctx.fill();
-  if (tail) { ctx.beginPath(); ctx.moveTo(W / 2 - 3, 17); ctx.lineTo(W / 2, 22); ctx.lineTo(W / 2 + 3, 17); ctx.fill(); }
-  pxText(ctx, text, 7 + cw, 10, 14, { sx: .72 });
+  ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.roundRect(1, 1, W - 2, 20, 5); ctx.fill();
+  if (tail) { ctx.beginPath(); ctx.moveTo(W / 2 - 3, 20); ctx.lineTo(W / 2, 25); ctx.lineTo(W / 2 + 3, 20); ctx.fill(); }
   crisp(ctx, W, H);
-  if (coin) sprite(ctx, COIN, 7, 5);
+  if (coin) sprite(ctx, COIN, 7, 6);
+  pxDraw(ctx, text, 7 + cw, 4, { sy: 2, bold: true });
 }
-
 // бабл-подсказка как буква S у лавки: белая подушка с хвостиком, текст по центру; ширина — по тексту
 function drawKey(c, text) {
   const ctx = c.getContext('2d'), font = '16px "Courier New", Courier, monospace', H = 24;
@@ -1563,94 +1588,111 @@ function drawKey(c, text) {
 }
 drawKey(shopKey, 'S');
 
-// ---------- картинки на билетах: рисуем в сером, потом дизерим ----------
+// ---------- картинки на билетах: фон приглушён и дизерится, а то, что продаёт билет, — чисто белым поверх ----------
 const srand = s => () => (s = s * 16807 % 2147483647) / 2147483647;
-function artNight(ctx, w, h, hz, seed) {         // ночное небо со звёздами и вода штрихами
+function artNight(ctx, w, h, hz, seed) {         // тёмное небо с редкими звёздами и вода штрихами
   const r = srand(seed), g = ctx.createLinearGradient(0, 0, 0, hz);
-  g.addColorStop(0, '#000'); g.addColorStop(1, '#3c3c3c');
+  g.addColorStop(0, '#000'); g.addColorStop(1, '#262626');
   ctx.fillStyle = g; ctx.fillRect(0, 0, w, hz);
-  ctx.fillStyle = '#fff';
-  for (let i = 0; i < 22; i++) ctx.fillRect(r() * w | 0, r() * hz * .85 | 0, 1, 1);
-  for (let i = 0; i < 3; i++) { const x = r() * w | 0, y = 3 + r() * hz * .6 | 0; ctx.fillRect(x - 2, y, 5, 1); ctx.fillRect(x, y - 2, 1, 5); }
-  ctx.fillStyle = '#060606'; ctx.fillRect(0, hz, w, h - hz);
+  ctx.fillStyle = '#bbb';
+  for (let i = 0; i < 16; i++) ctx.fillRect(r() * w | 0, r() * hz * .85 | 0, 1, 1);
+  ctx.fillStyle = '#050505'; ctx.fillRect(0, hz, w, h - hz);
   for (let y = hz + 2; y < h; y += 3) for (let n = 0; n < 3; n++) {
-    ctx.fillStyle = `rgba(255,255,255,${.22 + .3 * (y - hz) / (h - hz)})`;
+    ctx.fillStyle = `rgba(255,255,255,${.1 + .16 * (y - hz) / (h - hz)})`;
     ctx.fillRect(r() * w | 0, y, 4 + r() * 16 | 0, 1);
   }
 }
-function comet(ctx, x0, y0, x1, y1) {
-  const g = ctx.createLinearGradient(x0, y0, x1, y1);
-  g.addColorStop(0, 'rgba(255,255,255,0)'); g.addColorStop(1, '#fff');
-  ctx.strokeStyle = g; ctx.lineWidth = 3; ctx.lineCap = 'round';
-  ctx.beginPath(); ctx.moveTo(x0, y0); ctx.lineTo(x1, y1); ctx.stroke();
-  ctx.fillStyle = '#fff'; ctx.fillRect(x1 - 3, y1, 7, 1); ctx.fillRect(x1, y1 - 3, 1, 7);
-}
-function logEnd(ctx, x, y, r, ghost) {           // торец бревна
-  ctx.lineWidth = 1; ctx.strokeStyle = ghost ? '#fff' : '#000';
-  ctx.beginPath(); ctx.arc(x, y, r, 0, 6.29);
-  if (ghost) { ctx.setLineDash([2, 2]); ctx.stroke(); ctx.setLineDash([]); return; }
-  ctx.fillStyle = '#f2f2f2'; ctx.fill(); ctx.stroke();
-  ctx.strokeStyle = '#8a8a8a'; ctx.beginPath(); ctx.arc(x, y, r * .55, 0, 6.29); ctx.stroke();
-  ctx.fillStyle = '#555'; ctx.fillRect(Math.round(x) - 1, Math.round(y) - 1, 2, 2);
-}
-function pile(ctx, cx, base, r, n, ghost = 0) {  // штабель торцами: 3 внизу, 2, 1 — как на палубе
-  const st = r * 2.05;
-  for (let k = 0; k < n + ghost; k++) {
-    const j = k < 3 ? 0 : k < 5 ? 1 : 2, i = k < 3 ? k : k < 5 ? k - 3 : 0;
-    logEnd(ctx, cx + (i - (2 - j) / 2) * st, base - r - j * st * .86, r, k >= n);
-  }
-}
-function artBoat(ctx, cx, wy, s, n, ghost) {    // кораблик сбоку: корпус, рубка-домик на корме, брёвна торцами
+function logEnd(ctx, x, y, r, bright) {          // торец бревна: тусклый фон или яркий товар
   ctx.lineWidth = 1; ctx.strokeStyle = '#000';
-  ctx.fillStyle = 'rgba(255,255,255,.35)'; ctx.fillRect(cx - 20 * s, wy + 4 * s, 42 * s, 2);   // отражение
+  ctx.beginPath(); ctx.arc(x, y, r, 0, 6.29);
+  ctx.fillStyle = bright ? '#fff' : '#8c8c8c'; ctx.fill(); ctx.stroke();
+  ctx.strokeStyle = bright ? '#000' : '#444'; ctx.beginPath(); ctx.arc(x, y, r * .55, 0, 6.29); ctx.stroke();
+  ctx.fillStyle = bright ? '#000' : '#333'; ctx.fillRect(Math.round(x) - 1, Math.round(y) - 1, 2, 2);
+}
+const pileAt = (cx, base, r, k) => {             // штабель торцами: 3 внизу, 2, 1 — как на палубе
+  const j = k < 3 ? 0 : k < 5 ? 1 : 2, i = k < 3 ? k : k < 5 ? k - 3 : 0, st = r * 2.05;
+  return [cx + (i - (2 - j) / 2) * st, base - r - j * st * .86];
+};
+function pile(ctx, cx, base, r, n) { for (let k = 0; k < n; k++) logEnd(ctx, ...pileAt(cx, base, r, k), r); }
+function artBoat(ctx, cx, wy, s, n) {           // кораблик сбоку в полутоне: корпус, рубка-домик на корме, брёвна торцами
+  ctx.lineWidth = 1; ctx.strokeStyle = '#000';
   const g = ctx.createLinearGradient(0, wy - 6 * s, 0, wy + 4 * s);
-  g.addColorStop(0, '#fff'); g.addColorStop(1, '#6a6a6a');
+  g.addColorStop(0, '#9a9a9a'); g.addColorStop(1, '#383838');
   ctx.beginPath(); ctx.moveTo(cx - 24 * s, wy - 5 * s); ctx.lineTo(cx + 22 * s, wy - 5 * s); ctx.lineTo(cx + 30 * s, wy - 10 * s);
   ctx.lineTo(cx + 24 * s, wy + 4 * s); ctx.lineTo(cx - 21 * s, wy + 4 * s); ctx.closePath();
   ctx.fillStyle = g; ctx.fill(); ctx.stroke();
-  ctx.fillStyle = '#e6e6e6'; ctx.fillRect(cx - 21 * s, wy - 15 * s, 12 * s, 10 * s); ctx.strokeRect(cx - 21 * s, wy - 15 * s, 12 * s, 10 * s);
+  ctx.fillStyle = '#7c7c7c'; ctx.fillRect(cx - 21 * s, wy - 15 * s, 12 * s, 10 * s); ctx.strokeRect(cx - 21 * s, wy - 15 * s, 12 * s, 10 * s);
   ctx.beginPath(); ctx.moveTo(cx - 23 * s, wy - 15 * s); ctx.lineTo(cx - 15 * s, wy - 21 * s); ctx.lineTo(cx - 7 * s, wy - 15 * s); ctx.closePath();
-  ctx.fillStyle = '#9a9a9a'; ctx.fill(); ctx.stroke();
+  ctx.fillStyle = '#5a5a5a'; ctx.fill(); ctx.stroke();
   ctx.fillStyle = '#000'; ctx.fillRect(cx - 17 * s, wy - 12 * s, 3 * s, 3 * s);
-  if (n + ghost) pile(ctx, cx + 6 * s, wy - 5 * s, 3.4 * s, n, ghost);
+  pile(ctx, cx + 6 * s, wy - 5 * s, 3.4 * s, n);
 }
+const sparkle = (ctx, x, y) => { ctx.fillStyle = '#fff'; ctx.fillRect(x - 2, y, 5, 1); ctx.fillRect(x, y - 2, 1, 5); };
+const DECK_ART = { base: 66, r: 10 };
+const ENG_ART = { cx: 70, wy: 58, s: 1.25 };
+const CHAIN_ART = { base: 72, r: 11 };
 const SHOP_ITEMS = [
-  { id: 'deck', name: 'BIGGER DECK', desc: '+1 log on board', key: 'LOAD', val: '+1', price: 1500, seed: 11,
-    art(ctx, w, h) {
-      artNight(ctx, w, h, 56, this.seed); comet(ctx, 10, 6, 46, 26);
-      artBoat(ctx, w * .5, 62, 1.45, 5, 1);
-      pxText(ctx, '+1', w * .5 + 22, 20, 11, { b: true, color: '#fff' });
+  { id: 'deck', name: 'BIGGER DECK', desc: '+1 LOG ON BOARD', key: 'LOAD', val: '+1', price: 1500, seed: 11,
+    art(ctx, w, h) {                             // палуба крупно: пять брёвен в полутоне
+      artNight(ctx, w, h, 62, this.seed);
+      const { base, r } = DECK_ART, g = ctx.createLinearGradient(0, base, 0, base + 9);
+      g.addColorStop(0, '#8a8a8a'); g.addColorStop(1, '#2a2a2a');
+      ctx.fillStyle = g; ctx.strokeStyle = '#000'; ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.moveTo(8, base); ctx.lineTo(w - 4, base); ctx.lineTo(w - 12, base + 9); ctx.lineTo(14, base + 9); ctx.closePath(); ctx.fill(); ctx.stroke();
+      pile(ctx, w / 2, base, r, 5);
+    },
+    hi(ctx, w) {                                 // шестое бревно — белое, сверху штабеля, в пунктирном ореоле, и «+1»
+      const { base, r } = DECK_ART, [x, y] = pileAt(w / 2, base, r, 5);
+      ctx.strokeStyle = '#fff'; ctx.lineWidth = 1; ctx.setLineDash([2, 2]);
+      ctx.beginPath(); ctx.arc(x, y, r + 4, 0, 6.29); ctx.stroke(); ctx.setLineDash([]);
+      logEnd(ctx, x, y, r, true);
+      sparkle(ctx, x - 20, y - 4); sparkle(ctx, x + 19, y + 6);
+      pxDraw(ctx, '+1', x + 17, y - 16, { sy: 2, bold: true, color: '#fff' });
     } },
-  { id: 'engine', name: 'STRONGER ENGINE', desc: '+20% speed', key: 'SPEED', val: '+20%', price: 2400, seed: 23,
+  { id: 'engine', name: 'STRONGER ENGINE', desc: '+20% SPEED', key: 'SPEED', val: '+20%', price: 2400, seed: 23,
     art(ctx, w, h) {
       artNight(ctx, w, h, 54, this.seed);
-      ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(22, 18, 8, 0, 6.29); ctx.fill();   // месяц
-      ctx.fillStyle = '#000'; ctx.beginPath(); ctx.arc(26, 15, 7, 0, 6.29); ctx.fill();
-      const cx = w * .62, wy = 60, s = 1.2;
-      for (let i = 0; i < 7; i++) {               // линии скорости
-        const y = wy - 22 + i * 4, x0 = 4 + (i * 7) % 13, x1 = cx - 26 * s - (i % 3) * 5, g = ctx.createLinearGradient(x0, 0, x1, 0);
-        g.addColorStop(0, 'rgba(255,255,255,0)'); g.addColorStop(1, '#fff');
-        ctx.fillStyle = g; ctx.fillRect(x0, y, x1 - x0, 1);
+      ctx.fillStyle = '#777'; ctx.beginPath(); ctx.arc(20, 16, 7, 0, 6.29); ctx.fill();   // месяц
+      ctx.fillStyle = '#000'; ctx.beginPath(); ctx.arc(24, 13, 6, 0, 6.29); ctx.fill();
+      const { cx, wy, s } = ENG_ART; artBoat(ctx, cx, wy, s, 2);
+    },
+    hi(ctx, w) {                                 // скорость: белые полосы за кормой, волны-«усы» и бурун у носа
+      const { cx, wy, s } = ENG_ART, stern = cx - 22 * s;
+      ctx.fillStyle = '#fff';
+      [[-20, 30], [-14, 44], [-8, 36], [-2, 24]].forEach(([dy, l], i) => ctx.fillRect(stern - 4 - l - (i % 2) * 6, wy + dy, l, 2));
+      ctx.strokeStyle = '#fff'; ctx.lineWidth = 1.5;
+      for (const side of [-1, 1]) {              // расходящиеся волны от кормы
+        ctx.beginPath();
+        for (let t = 0; t <= 1; t += .05) {
+          const x = stern - t * 46, y = wy + 4 + side * t * 9 + Math.sin(t * 22) * 1.2;
+          t ? ctx.lineTo(x, y) : ctx.moveTo(x, y);
+        }
+        ctx.stroke();
       }
-      ctx.fillStyle = 'rgba(255,255,255,.7)';      // пена за кормой
-      ctx.beginPath(); ctx.moveTo(cx - 22 * s, wy + 2); ctx.lineTo(cx - 52 * s, wy + 9); ctx.lineTo(cx - 52 * s, wy + 4); ctx.closePath(); ctx.fill();
-      artBoat(ctx, cx, wy, s, 2, 0);
-      ctx.fillStyle = '#fff'; for (let i = 0; i < 6; i++) ctx.fillRect(cx + 32 * s + (i % 3) * 3, wy - 6 - (i * 5) % 9, 1, 1);   // брызги у носа
+      ctx.beginPath(); ctx.moveTo(cx + 24 * s, wy + 4); ctx.quadraticCurveTo(cx + 36 * s, wy, cx + 40 * s, wy + 6); ctx.stroke();   // бурун
+      pxDraw(ctx, '+20%', w - 30, 6, { sy: 2, bold: true, color: '#fff' });
     } },
-  { id: 'straps', name: 'CARGO STRAPS', desc: 'no capsize: extra logs stay in the water', key: 'SAFE', val: 'YES', price: 1200, seed: 37,
-    art(ctx, w, h) {
-      artNight(ctx, w, h, 66, this.seed);
-      const cx = w / 2, base = 70, r = 11, st = r * 2.05;
-      pile(ctx, cx, base, r, 6);
-      ctx.save(); ctx.beginPath();                 // ремни крест-накрест — только поверх брёвен
-      [[0, 0], [-1, 0], [1, 0], [-.5, 1], [.5, 1], [0, 2]].forEach(([i, j]) => { const x = cx + i * st, y = base - r - j * st * .86; ctx.moveTo(x + r, y); ctx.arc(x, y, r, 0, 6.29); });
-      ctx.clip();
-      const straps = () => { ctx.beginPath(); ctx.moveTo(cx - 34, base - 52); ctx.lineTo(cx + 26, base + 4); ctx.moveTo(cx + 34, base - 52); ctx.lineTo(cx - 26, base + 4); ctx.stroke(); };
-      ctx.strokeStyle = '#000'; ctx.lineWidth = 5; straps();
-      ctx.strokeStyle = '#9a9a9a'; ctx.lineWidth = 1; ctx.setLineDash([2, 2]); straps();
-      ctx.restore(); ctx.setLineDash([]);
-      ctx.fillStyle = '#fff'; ctx.fillRect(cx - 5, base - 33, 10, 8);   // пряжка
-      ctx.strokeStyle = '#000'; ctx.lineWidth = 1; ctx.strokeRect(cx - 4.5, base - 32.5, 9, 7); ctx.fillStyle = '#000'; ctx.fillRect(cx - 1, base - 31, 2, 4);
+  { id: 'chains', name: 'CARGO CHAINS', desc: 'NO CAPSIZE WHEN FULL', key: 'SAFE', val: 'YES', price: 1200, seed: 37,
+    art(ctx, w, h) { artNight(ctx, w, h, 66, this.seed); pile(ctx, w / 2, CHAIN_ART.base, CHAIN_ART.r, 6); },
+    hi(ctx, w) {                                 // цепи крест-накрест поверх штабеля и замок в центре
+      const cx = w / 2, { base } = CHAIN_ART;
+      const chain = (x0, y0, x1, y1) => {
+        const L = Math.hypot(x1 - x0, y1 - y0), a = Math.atan2(y1 - y0, x1 - x0);
+        for (let d = 0, n = 0; d < L; d += 6.5, n++) {
+          ctx.save(); ctx.translate(x0 + Math.cos(a) * d, y0 + Math.sin(a) * d); ctx.rotate(a);
+          const link = () => { ctx.beginPath(); n % 2 ? (ctx.moveTo(-3.5, 0), ctx.lineTo(3.5, 0)) : ctx.ellipse(0, 0, 4.5, 2.8, 0, 0, 6.29); ctx.stroke(); };
+          ctx.strokeStyle = '#000'; ctx.lineWidth = 4.5; link();
+          ctx.strokeStyle = '#fff'; ctx.lineWidth = 2; link();
+          ctx.restore();
+        }
+      };
+      chain(cx - 30, base - 50, cx + 28, base - 2); chain(cx + 30, base - 50, cx - 28, base - 2);
+      const ly = base - 33;                      // замок
+      ctx.strokeStyle = '#000'; ctx.lineWidth = 4; ctx.beginPath(); ctx.arc(cx, ly - 3, 4, Math.PI, 0); ctx.stroke();
+      ctx.strokeStyle = '#fff'; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(cx, ly - 3, 4, Math.PI, 0); ctx.stroke();
+      ctx.fillStyle = '#000'; ctx.fillRect(cx - 7, ly - 4, 14, 12);
+      ctx.fillStyle = '#fff'; ctx.fillRect(cx - 6, ly - 3, 12, 10);
+      ctx.fillStyle = '#000'; ctx.fillRect(cx - 1, ly - 1, 2, 3); ctx.fillRect(cx, ly + 2, 1, 3);
     } },
 ];
 
@@ -1668,9 +1710,9 @@ function sideNotch(ctx, y, w) {                  // полукруглые вы�
   for (const x of [0, w]) { ctx.beginPath(); ctx.arc(x, y, 6, 0, 6.29); ctx.fill(); }
   ctx.globalCompositeOperation = 'source-over';
 }
-function wrap(ctx, text, max) {
+function wrap(text, max) {
   const out = []; let line = '';
-  for (const w of text.split(' ')) { const t = line ? line + ' ' + w : w; if (ctx.measureText(t).width * .7 > max && line) { out.push(line); line = w; } else line = t; }
+  for (const w of text.split(' ')) { const t = line ? line + ' ' + w : w; if (pxW(t) > max && line) { out.push(line); line = w; } else line = t; }
   return out.concat(line);
 }
 function drawBody(it) {
@@ -1680,33 +1722,36 @@ function drawBody(it) {
   cutEdge(ctx, 0, TW); cutEdge(ctx, BODY_H, TW, true); sideNotch(ctx, BODY_H, TW);
   const ax = 8, ay = 9, aw = TW - 16, ah = 78;
   ctx.fillStyle = '#000'; ctx.fillRect(ax - 2, ay - 2, aw + 4, ah + 4);
-  ctx.save(); ctx.translate(ax, ay); ctx.beginPath(); ctx.rect(0, 0, aw, ah); ctx.clip(); it.art(ctx, aw, ah); ctx.restore();
+  const inBox = f => { ctx.save(); ctx.translate(ax, ay); ctx.beginPath(); ctx.rect(0, 0, aw, ah); ctx.clip(); f(); ctx.restore(); };
+  inBox(() => it.art(ctx, aw, ah));
   dither(ctx, ax, ay, aw, ah);
-  pxText(ctx, it.name, 7, 99, 13, { b: true, sx: .62 });
-  ctx.font = FONT(10); wrap(ctx, it.desc, TW - 14).slice(0, 2).forEach((l, i) => pxText(ctx, l, 7, 111 + i * 10, 10));
-  ctx.fillStyle = '#000'; for (let x = 7; x < TW - 7; x += 4) ctx.fillRect(x, 130, 2, 1);   // пунктир
+  inBox(() => it.hi(ctx, aw, ah));               // товар — поверх дизера, без растра
   if (owned) {                                   // штамп «продано» поверх картинки
     ctx.save(); ctx.translate(TW / 2, 48); ctx.rotate(-.18);
     ctx.fillStyle = '#000'; ctx.fillRect(-31, -12, 62, 24); ctx.fillStyle = '#fff'; ctx.fillRect(-29, -10, 58, 20);
     ctx.fillStyle = '#000'; ctx.fillRect(-27, -8, 54, 16);
-    pxText(ctx, 'SOLD', -19, 1, 16, { b: true, sx: .8, color: '#fff' });
     ctx.restore();
   }
   crisp(ctx, TW, BODY_H, 200);
-  sprite(ctx, COIN, TW - 16, 95);
+  if (owned) {                                   // надпись — по клеткам, без поворота: штамп чуть косой, буквы ровные
+    pxDraw(ctx, 'SOLD', TW / 2 - pxW('SOLD', true) / 2, 41, { sy: 2, bold: true, color: '#fff' });
+  }
+  pxDraw(ctx, it.name, 7, 92, { sy: 2, bold: true });
+  wrap(it.desc, TW - 14).slice(0, 2).forEach((l, i) => pxDraw(ctx, l, 7, 111 + i * 9));
+  ctx.fillStyle = '#000'; for (let x = 7; x < TW - 7; x += 4) ctx.fillRect(x, 130, 2, 1);   // пунктир
 }
 function drawStub(it, no) {
   const c = it.stub, ctx = c.getContext('2d'), poor = coins < it.price;
   pxSize(c, TW, STUB_H, shopK);
   ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, TW, STUB_H);
   cutEdge(ctx, 0, TW, true); sideNotch(ctx, 0, TW); cutEdge(ctx, STUB_H, TW);
-  const col = [8, 46, 84];
-  [['NO. :', String(no + 1).padStart(2, '0')], [it.key + ' :', it.val], ['PRICE :', String(it.price)]].forEach(([a, b], i) => {
-    pxText(ctx, a, col[i], 10, 11); pxText(ctx, b, col[i], 21, 12);
-  });
-  pxText(ctx, 'DOCK :', col[0], 33, 11); pxText(ctx, 'SHOP', col[0], 43, 12);
-  pxText(ctx, 'STATUS :', col[1], 33, 11); pxText(ctx, poor ? 'NEED ' + (it.price - coins) : 'READY', col[1], 43, 12);
   crisp(ctx, TW, STUB_H, 200);
+  const col = [8, 44, 82];
+  [['NO. :', String(no + 1).padStart(2, '0')], [it.key + ' :', it.val], ['PRICE :', String(it.price)]].forEach(([a, b], i) => {
+    pxDraw(ctx, a, col[i], 7); pxDraw(ctx, b, col[i], 17, { bold: true });
+  });
+  pxDraw(ctx, 'DOCK :', col[0], 29); pxDraw(ctx, 'SHOP', col[0], 39, { bold: true });
+  pxDraw(ctx, 'STATUS :', col[1], 29); pxDraw(ctx, poor ? 'NEED ' + (it.price - coins) : 'READY', col[1], 39, { bold: true });
 }
 SHOP_ITEMS.forEach((it, i) => {
   it.el = document.createElement('div'); it.el.className = 'ticket';
@@ -1780,14 +1825,10 @@ function showWallet() { wallet.t = 2.6; }
 function spawnCoin(pay) {
   const coin = document.createElement('canvas'), label = document.createElement('canvas');
   pxSize(coin, 9, 9, 3); sprite(coin.getContext('2d'), COIN, 0, 0);
-  const ctx = label.getContext('2d'), t = '+' + pay;
-  ctx.font = FONT(15, true);
-  const W = Math.ceil(ctx.measureText(t).width * .72) + 6, H = 18;
+  const ctx = label.getContext('2d'), t = '+' + pay, W = pxW(t, true) + 4, H = 18;
   pxSize(label, W, H, 2);
-  for (const [dx, dy] of [[-1, 0], [1, 0], [0, -1], [0, 1], [-1, -1], [1, 1], [-1, 1], [1, -1]]) pxText(ctx, t, 3 + dx, 9 + dy, 15, { b: true, sx: .72 });   // чёрная обводка
-  crisp(ctx, W, H);
-  pxText(ctx, t, 3, 9, 15, { b: true, sx: .72, color: '#fff' });
-  crisp(ctx, W, H, 120);                       // белые штрихи — пожирнее, чтобы читались на воде
+  for (const [dx, dy] of [[-1, 0], [1, 0], [0, -1], [0, 1], [-1, -1], [1, 1], [-1, 1], [1, -1]]) pxDraw(ctx, t, 2 + dx, 2 + dy, { sy: 2, bold: true });   // чёрная обводка
+  pxDraw(ctx, t, 2, 2, { sy: 2, bold: true, color: '#fff' });
   fxEl.append(coin, label);
   coinFx.push({ coin, label, t: 0, off: rr(-14, 14) });
 }

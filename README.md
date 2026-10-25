@@ -21,7 +21,7 @@ The dam has burst. A village of long-roofed houses stands half under water, and 
 - **Don't overload.** Five logs is the limit. The sixth one tips the boat over and spills the whole cargo back into the water.
 - **Rebuild the dam.** Bring the logs to the breach in the west. The current near the dam pushes hard, so you have to fight your way in. Each log you unload joins the stack.
 - **Earn coins.** Every log you unload pays 100–150 coins. The counter over the dam shows how many logs are in.
-- **Upgrade the boat.** Sail to the little shop with the pennant and press `S`. Three ticket-shaped upgrades: cargo straps (1200), bigger deck (1500), stronger engine (2400). Buying one tears the stub off the ticket.
+- **Upgrade the boat.** Sail to the little shop with the pennant and press `S`. Three ticket-shaped upgrades: cargo chains (1200), bigger deck (1500), stronger engine (2400). Buying one tears the stub off the ticket.
 - **Goal:** 100 logs on the dam.
 
 ## Controls
