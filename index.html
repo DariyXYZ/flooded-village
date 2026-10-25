@@ -1220,29 +1220,35 @@ const INTRO_X = [-50, -44, -38, -32];
 const intro = { on: false, step: -1, hold: 0 };
 const bubble = document.getElementById('bubble'), bubbleP = new THREE.Vector3();
 // бабл рисуется в маленьком канвасе и растягивается без сглаживания: кривая форма, пиксельный шрифт с засечками
+// форма бабла — «подушка» (суперэллипс): лёгкая общая кривизна + мелкое дрожание линии, как от руки; каждый раз своя
+function pillow(ctx, cx, cy, a, b, rnd, shake = 1) {   // shake — сила дрожания (у мелких плашек пиксель крупнее — дрожим слабее)
+  const n = rnd(3, 5);                                   // насколько «квадратная» подушка
+  const p1 = rnd(0, 6.28), p2 = rnd(0, 6.28), k1 = rnd(.15, .35), k2 = rnd(.1, .25), sk = rnd(-.012, .012);
+  const p3 = rnd(0, 6.28), p4 = rnd(0, 6.28), f3 = Math.round(rnd(15, 21)), f4 = Math.round(rnd(29, 37)), j3 = rnd(.35, .55), j4 = rnd(.2, .35);
+  ctx.beginPath();
+  for (let i = 0; i <= 240; i++) {
+    const t = i / 240 * Math.PI * 2, c = Math.cos(t), s = Math.sin(t);
+    const wob = (Math.sin(t * 2 + p1) * k1 + Math.sin(t * 3 + p2) * k2) * 2.5;     // крупная кривизна — слабая, в пикселях
+    const jit = Math.sin(t * f3 + p3) * j3 + Math.sin(t * f4 + p4) * j4;          // мелкое дрожание, в пикселях
+    const d = (wob + jit) * shake;                                  // смещение наружу — одинаковое для длинных и коротких баблов
+    const x = cx + Math.sign(c) * Math.pow(Math.abs(c), 2 / n) * a + c * d;
+    const y = cy + Math.sign(s) * Math.pow(Math.abs(s), 2 / n) * b + s * d + (x - cx) * sk;
+    i ? ctx.lineTo(x, y) : ctx.moveTo(x, y);
+  }
+  ctx.closePath();
+}
 function drawBubble(text) {
   const S = 2 / (devicePixelRatio || 1), ctx = bubble.getContext('2d');   // 1 пиксель бабла = 2 физических, как мелкий шаг растра
   const FONT = '16px "Courier New", Courier, monospace', SX = .68;   // слэб-антиква одной толщины, сжатая по ширине — высокая и узкая
   ctx.font = FONT;
-  // форма — мягкая «подушка» (суперэллипс) с плавной кривизной по шуму: без изломов, но каждый раз своя
   const rnd = (a, b) => a + Math.random() * (b - a);
   const pad = rnd(14, 19), tail = rnd(9, 14);
   const tw = Math.ceil(ctx.measureText(text).width * SX), w = tw + pad * 2, h = rnd(24, 30);
   const M = 7, W = Math.ceil(w + M * 2), H = Math.ceil(h + tail + M * 2);
   bubble.width = W; bubble.height = H;
   bubble.style.width = W * S + 'px'; bubble.style.height = H * S + 'px';
-  const x0 = M, y0 = M, cx = x0 + w / 2, cy = y0 + h / 2, a = w / 2, b = h / 2;
-  const n = rnd(3, 5);                                   // насколько «квадратная» подушка
-  const p1 = rnd(0, 6.28), p2 = rnd(0, 6.28), k1 = rnd(.5, 1.2), k2 = rnd(.2, .7), sk = rnd(-.025, .025);
-  ctx.beginPath();
-  for (let i = 0; i <= 96; i++) {
-    const t = i / 96 * Math.PI * 2, c = Math.cos(t), s = Math.sin(t);
-    const r = 1 + (Math.sin(t * 2 + p1) * k1 + Math.sin(t * 3 + p2) * k2) / Math.min(a, b) * .9;
-    const x = cx + Math.sign(c) * Math.pow(Math.abs(c), 2 / n) * a * r;
-    const y = cy + Math.sign(s) * Math.pow(Math.abs(s), 2 / n) * b * r + (x - cx) * sk;
-    i ? ctx.lineTo(x, y) : ctx.moveTo(x, y);
-  }
-  ctx.closePath();
+  const x0 = M, y0 = M;
+  pillow(ctx, x0 + w / 2, y0 + h / 2, w / 2, h / 2, rnd);
   ctx.fillStyle = '#fff'; ctx.fill();
   // хвостик — отдельный плавный клин, растёт из нижнего края
   const tx = x0 + w * rnd(.22, .42), base = y0 + h - 3, tdx = rnd(-8, -2), tw2 = rnd(5, 8), bend = rnd(-3, 3);
@@ -1553,16 +1559,23 @@ function sprite(ctx, rows, x, y, ink = '#000', paper = '#fff') {
   rows.forEach((r, j) => [...r].forEach((ch, i) => { if (ch !== '.') { ctx.fillStyle = ch === '#' ? ink : paper; ctx.fillRect(x + i, y + j, 1, 1); } }));
 }
 // бабл как буква S у лавки: белая подушка с хвостиком, текст по центру (по желанию — монета перед ним)
-function drawKey(c, text, { coin = false, tail = true } = {}) {
-  const ctx = c.getContext('2d'), tw = Math.ceil(inkW(text)), cw = coin ? 12 : 0, H = tail ? 24 : 19;
-  const W = Math.max(22, tw + cw + 12);
+function drawKey(c, text, { coin = false, tail = true, seed = 1 } = {}) {
+  let q = seed * 7919 + 13;
+  const rnd = (a, b) => a + (q = q * 16807 % 2147483647) / 2147483647 * (b - a);
+  const ctx = c.getContext('2d'), tw = Math.ceil(inkW(text)), cw = coin ? 12 : 0;
+  const w = Math.max(18, tw + cw + 10), h = 17, M = 3, W = Math.ceil(w + M * 2), H = M + h + (tail ? 7 : M);
   pxSize(c, W, H, 3);
-  ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.roundRect(2, 2, W - 4, 17, 5); ctx.fill();
-  if (tail) { ctx.beginPath(); ctx.moveTo(W / 2 - 3, 18); ctx.lineTo(W / 2, 23); ctx.lineTo(W / 2 + 3, 18); ctx.fill(); }
+  ctx.fillStyle = '#fff'; pillow(ctx, W / 2, M + h / 2, w / 2, h / 2, rnd, .5); ctx.fill();
+  if (tail) {                                    // хвостик — плавный клин, кончик ровно под центром (на объект)
+    const tx = W / 2, base = M + h - 3, off = rnd(-2, 2), bend = rnd(-1.5, 1.5), tw2 = rnd(5, 7);
+    ctx.beginPath(); ctx.moveTo(tx - tw2 / 2 + off, base);
+    ctx.quadraticCurveTo(tx - 1 + bend, base + 5, tx, H - 1);
+    ctx.quadraticCurveTo(tx + 1 + bend, base + 5, tx + tw2 / 2 + off, base); ctx.fill();
+  }
   crisp(ctx, W, H);
   const x0 = Math.round((W - tw - cw) / 2);
-  if (coin) sprite(ctx, COIN, x0, 6);
-  inkText(ctx, text, x0 + cw, 11);
+  if (coin) sprite(ctx, COIN, x0, M + 4);
+  inkText(ctx, text, x0 + cw, M + h / 2 + 1);
 }
 drawKey(shopKey, 'S');
 
@@ -1634,20 +1647,21 @@ const SHOP_ITEMS = [
       ctx.fillStyle = '#000'; ctx.beginPath(); ctx.arc(24, 13, 6, 0, 6.29); ctx.fill();
       const { cx, wy, s } = ENG_ART; artBoat(ctx, cx, wy, s, 2);
     },
-    hi(ctx, w) {                                 // скорость: белые полосы за кормой, волны-«усы» и бурун у носа
+    hi(ctx, w) {                                 // скорость: белые полосы за кормой, плавные волны и завиток у носа
       const { cx, wy, s } = ENG_ART, stern = cx - 22 * s;
       ctx.fillStyle = '#fff';
       [[-20, 30], [-14, 44], [-8, 36], [-2, 24]].forEach(([dy, l], i) => ctx.fillRect(stern - 4 - l - (i % 2) * 6, wy + dy, l, 2));
-      ctx.strokeStyle = '#fff'; ctx.lineWidth = 1.5;
-      for (const side of [-1, 1]) {              // расходящиеся волны от кормы
-        ctx.beginPath();
-        for (let t = 0; t <= 1; t += .05) {
-          const x = stern - t * 46, y = wy + 4 + side * t * 9 + Math.sin(t * 22) * 1.2;
-          t ? ctx.lineTo(x, y) : ctx.moveTo(x, y);
-        }
+      ctx.strokeStyle = '#fff'; ctx.lineWidth = 2; ctx.lineCap = 'round';
+      const wave = pts => {                       // плавная волна: точки — цепочка кубических кривых
+        ctx.beginPath(); ctx.moveTo(...pts[0]);
+        for (let i = 1; i < pts.length; i += 3) ctx.bezierCurveTo(...pts[i], ...pts[i + 1], ...pts[i + 2]);
         ctx.stroke();
-      }
-      ctx.beginPath(); ctx.moveTo(cx + 24 * s, wy + 4); ctx.quadraticCurveTo(cx + 36 * s, wy, cx + 40 * s, wy + 6); ctx.stroke();   // бурун
+      };
+      wave([[stern - 40, wy - 6], [stern - 34, wy - 12], [stern - 22, wy - 9], [stern - 10, wy - 2]]);   // верхний ус — горбик
+      wave([[stern - 40, wy + 5], [stern - 32, wy - 1], [stern - 22, wy + 8], [stern - 10, wy + 8],
+            [stern, wy + 8], [stern + 8, wy + 10], [stern + 18, wy + 9]]);                              // нижний — длинная S
+      wave([[stern + 4, wy + 10], [cx - 10, wy + 8], [cx + 12 * s, wy + 9], [cx + 26 * s, wy + 5],
+            [cx + 32 * s, wy + 2], [cx + 31 * s, wy - 4], [cx + 26 * s, wy - 1]]);                      // ватерлиния и завиток у носа
       inkText(ctx, '+20%', w - 32, 12, { color: '#fff' });
     } },
   { id: 'chains', name: 'CARGO CHAINS', desc: 'NO CAPSIZE WHEN FULL', key: 'SAFE', val: 'YES', price: 1200, seed: 37,
@@ -1756,7 +1770,7 @@ function drawShop() {
     if (!it.stub.classList.contains('torn')) it.stub.classList.toggle('gone', !!upg[it.id]);
     it.el.style.cursor = upg[it.id] ? 'default' : 'pointer';
   });
-  drawKey(shopHead, String(coins), { coin: true, tail: false });
+  drawKey(shopHead, String(coins), { coin: true, tail: false, seed: 4 });
 }
 function buy(i) {
   const it = SHOP_ITEMS[i];
@@ -1767,7 +1781,7 @@ function buy(i) {
   it.stub.classList.add('torn');                // корешок отрывается и падает
   it.el.style.cursor = 'default';
   SHOP_ITEMS.forEach((o, j) => { if (o !== it) drawStub(o, j); });
-  drawKey(shopHead, String(coins), { coin: true, tail: false });
+  drawKey(shopHead, String(coins), { coin: true, tail: false, seed: 4 });
   setTimeout(() => { if (upg[it.id]) drawBody(it); }, 260);   // штамп — когда корешок уже оторван
 }
 shopKey.addEventListener('click', () => shopUI.near && openShop());
@@ -1814,12 +1828,12 @@ const COIN_SPIN = [1, .75, .35, .75];                  // монетка кру�
 function updateTags(dt) {
   const play = boat.g.visible && !splash.show && !won;
   const nearDam = play && !intro.on && Math.hypot(boat.x - DAM_X, boat.z) < 10;   // как у лавки: только когда подплыл
-  if (nearDam && delivered !== damShown) { damShown = delivered; drawKey(damTag, `${delivered} / ${GOAL}`); }
+  if (nearDam && delivered !== damShown) { damShown = delivered; drawKey(damTag, `${delivered}/${GOAL}`, { seed: 2 }); }
   damTag.style.opacity = nearDam ? 1 : 0;
   toScreen(damTag, DAM_X + 1.6, 3.6, 0);
   wallet.t -= dt;
   const wOn = wallet.t > 0 && play;
-  if (wOn && wallet.shown !== coins) { wallet.shown = coins; drawKey(walletEl, String(coins), { coin: true }); }
+  if (wOn && wallet.shown !== coins) { wallet.shown = coins; drawKey(walletEl, String(coins), { coin: true, seed: 3 }); }
   walletEl.style.opacity = wOn ? 1 : 0;
   toScreen(walletEl, boat.x, 2.1, boat.z);
   for (let i = coinFx.length - 1; i >= 0; i--) {
