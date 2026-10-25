@@ -1525,66 +1525,36 @@ function pxSize(c, W, H, k) {                    // k — физических �
   const S = k / (devicePixelRatio || 1);
   c.width = W; c.height = H; c.style.width = W * S + 'px'; c.style.height = H * S + 'px';
 }
-// пиксельный шрифт 7 строк с засечками — узкий, «как Times Condensed»; рисуется по клеткам, без порогов и каши
-const GLYPHS = Object.fromEntries(Object.entries({
-  A: '..#../.#.#./#...#/#...#/#####/#...#/##.##', B: '####./.#..#/.#..#/.###./.#..#/.#..#/####.',
-  C: '.####/#...#/#..../#..../#..../#...#/.###.', D: '####./.#..#/.#..#/.#..#/.#..#/.#..#/####.',
-  E: '#####/.#..#/.#.../.###./.#.../.#..#/#####', F: '#####/.#..#/.#.../.###./.#.../.#.../###..',
-  G: '.####/#...#/#..../#.###/#...#/#...#/.###.', H: '##.##/#...#/#...#/#####/#...#/#...#/##.##',
-  I: '###/.#./.#./.#./.#./.#./###', J: '..###/...#./...#./...#./#..#./#..#./.##..',
-  K: '##.##/.#.#./.##../.##../.#.#./.#..#/##.##', L: '###../.#.../.#.../.#.../.#.../.#..#/#####',
-  M: '##.##/##.##/#.#.#/#.#.#/#...#/#...#/##.##', N: '#...#/##..#/##..#/#.#.#/#..##/#..##/#...#',
-  O: '.###./#...#/#...#/#...#/#...#/#...#/.###.', P: '####./.#..#/.#..#/.###./.#.../.#.../###..',
-  Q: '.###./#...#/#...#/#...#/#.#.#/#..#./.##.#', R: '####./.#..#/.#..#/.###./.#.#./.#..#/##.##',
-  S: '.####/#...#/#..../.###./....#/#...#/####.', T: '#####/#.#.#/..#../..#../..#../..#../.###.',
-  U: '##.##/#...#/#...#/#...#/#...#/#...#/.###.', V: '##.##/#...#/#...#/.#.#./.#.#./.#.#./..#..',
-  W: '##.##/#...#/#...#/#.#.#/#.#.#/##.##/#...#', X: '##.##/.#.#./.#.#./..#../.#.#./.#.#./##.##',
-  Y: '##.##/#...#/.#.#./..#../..#../..#../.###.', Z: '#####/#...#/...#./..#../.#.../#...#/#####',
-  0: '.##./#..#/#..#/#..#/#..#/#..#/.##.', 1: '.#./##./.#./.#./.#./.#./###',
-  2: '.##./#..#/...#/..#./.#../#.../####', 3: '###./...#/...#/.##./...#/...#/###.',
-  4: '..#./.##./#.#./#.#./####/..#./.###', 5: '####/#.../###./...#/...#/#..#/.##.',
-  6: '.##./#.../#.../###./#..#/#..#/.##.', 7: '####/#..#/...#/..#./..#./.#../.#..',
-  8: '.##./#..#/#..#/.##./#..#/#..#/.##.', 9: '.##./#..#/#..#/.###/...#/...#/.##.',
-  ' ': '../../../../../../..', '+': '...../..#../..#../#####/..#../..#../.....', '-': '..../..../..../####/..../..../....',
-  '%': '##..#/##..#/...#./..#../.#.../#..##/#..##', ':': './#/./././#/.', '.': './././././#/#', '/': '...#/...#/..#./..#./.#../.#../#...',
-}).map(([k, v]) => [k, v.split('/')]));
-const pxW = (t, bold) => [...t.toUpperCase()].reduce((w, ch) => w + (GLYPHS[ch] || GLYPHS[' '])[0].length + 1 + (bold ? 1 : 0), -1);
-function pxDraw(ctx, t, x, y, { sy = 1, bold = false, color = '#000' } = {}) {   // y — верх строки; sy=2 — высокие узкие буквы
-  ctx.fillStyle = color;
-  for (const ch of t.toUpperCase()) {
-    const g = GLYPHS[ch] || GLYPHS[' '];
-    g.forEach((r, j) => [...r].forEach((p, i) => { if (p === '#') ctx.fillRect(x + i, y + j * sy, bold ? 2 : 1, sy); }));
-    x += g[0].length + 1 + (bold ? 1 : 0);
-  }
-  return x;
+// единый шрифт — как в баблах вступления и в букве S: Courier, сжатый по ширине, жёсткий порог без серого
+const TXT_SX = .68, txtFont = n => `${n}px "Courier New", Courier, monospace`, inkCan = document.createElement('canvas');
+const inkW = (t, n = 16) => { const c = inkCan.getContext('2d'); c.font = txtFont(n); return c.measureText(t).width * TXT_SX; };
+function inkText(ctx, t, x, y, { n = 16, color = '#000', center = false } = {}) {   // y — середина строки
+  const w = Math.ceil(inkW(t, n)) + 2, h = Math.ceil(n * 1.4), c = inkCan.getContext('2d');
+  inkCan.width = w; inkCan.height = h;
+  c.font = txtFont(n); c.textBaseline = 'middle';
+  c.save(); c.translate(1, h / 2); c.scale(TXT_SX, 1); c.fillText(t, 0, 0); c.restore();
+  const im = c.getImageData(0, 0, w, h), d = im.data, v = color === '#fff' ? 255 : 0;
+  for (let i = 0; i < d.length; i += 4) { d[i + 3] = d[i + 3] > 30 ? 255 : 0; d[i] = d[i + 1] = d[i + 2] = v; }   // тот же порог, что у бабла
+  c.putImageData(im, 0, 0);
+  ctx.drawImage(inkCan, Math.round(center ? x - w / 2 : x - 1), Math.round(y - h / 2));
+  return w - 2;
 }
 // монета-мон: круглая, с квадратной дыркой — как у старых японских монет
 const COIN = ['..#####..', '.#ooooo#.', '#ooooooo#', '#oo###oo#', '#oo#.#oo#', '#oo###oo#', '#ooooooo#', '.#ooooo#.', '..#####..'];
 function sprite(ctx, rows, x, y, ink = '#000', paper = '#fff') {
   rows.forEach((r, j) => [...r].forEach((ch, i) => { if (ch !== '.') { ctx.fillStyle = ch === '#' ? ink : paper; ctx.fillRect(x + i, y + j, 1, 1); } }));
 }
-// плашка с суммой: белая подушка, монета и число высоким пиксельным шрифтом, по желанию хвостик вниз
-function drawTag(c, text, { coin = false, tail = true, k = 2 } = {}) {
-  const ctx = c.getContext('2d'), cw = coin ? 13 : 0, W = pxW(text, true) + cw + 14, H = tail ? 27 : 22;
-  pxSize(c, W, H, k);
-  ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.roundRect(1, 1, W - 2, 20, 5); ctx.fill();
-  if (tail) { ctx.beginPath(); ctx.moveTo(W / 2 - 3, 20); ctx.lineTo(W / 2, 25); ctx.lineTo(W / 2 + 3, 20); ctx.fill(); }
-  crisp(ctx, W, H);
-  if (coin) sprite(ctx, COIN, 7, 6);
-  pxDraw(ctx, text, 7 + cw, 4, { sy: 2, bold: true });
-}
-// бабл-подсказка как буква S у лавки: белая подушка с хвостиком, текст по центру; ширина — по тексту
-function drawKey(c, text) {
-  const ctx = c.getContext('2d'), font = '16px "Courier New", Courier, monospace', H = 24;
-  ctx.font = font;
-  const W = Math.max(22, Math.ceil(ctx.measureText(text).width * .8) + 12);
+// бабл как буква S у лавки: белая подушка с хвостиком, текст по центру (по желанию — монета перед ним)
+function drawKey(c, text, { coin = false, tail = true } = {}) {
+  const ctx = c.getContext('2d'), tw = Math.ceil(inkW(text)), cw = coin ? 12 : 0, H = tail ? 24 : 19;
+  const W = Math.max(22, tw + cw + 12);
   pxSize(c, W, H, 3);
-  ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.roundRect(2, 2, W - 4, H - 7, 5); ctx.fill();
-  ctx.beginPath(); ctx.moveTo(W / 2 - 3, H - 6); ctx.lineTo(W / 2, H - 1); ctx.lineTo(W / 2 + 3, H - 6); ctx.fill();
-  ctx.fillStyle = '#000'; ctx.font = font; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-  ctx.save(); ctx.translate(W / 2, H / 2 - 1); ctx.scale(.8, 1); ctx.fillText(text, 0, 1); ctx.restore();
-  ctx.textAlign = 'left';
+  ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.roundRect(2, 2, W - 4, 17, 5); ctx.fill();
+  if (tail) { ctx.beginPath(); ctx.moveTo(W / 2 - 3, 18); ctx.lineTo(W / 2, 23); ctx.lineTo(W / 2 + 3, 18); ctx.fill(); }
   crisp(ctx, W, H);
+  const x0 = Math.round((W - tw - cw) / 2);
+  if (coin) sprite(ctx, COIN, x0, 6);
+  inkText(ctx, text, x0 + cw, 11);
 }
 drawKey(shopKey, 'S');
 
@@ -1629,7 +1599,7 @@ function artBoat(ctx, cx, wy, s, n) {           // кораблик сбоку �
 }
 const sparkle = (ctx, x, y) => { ctx.fillStyle = '#fff'; ctx.fillRect(x - 2, y, 5, 1); ctx.fillRect(x, y - 2, 1, 5); };
 const DECK_ART = { base: 66, r: 10 };
-const ENG_ART = { cx: 70, wy: 58, s: 1.25 };
+const ENG_ART = { cx: 86, wy: 58, s: 1.25 };
 const CHAIN_ART = { base: 72, r: 11 };
 const SHOP_ITEMS = [
   { id: 'deck', name: 'BIGGER DECK', desc: '+1 LOG ON BOARD', key: 'LOAD', val: '+1', price: 1500, seed: 11,
@@ -1647,7 +1617,7 @@ const SHOP_ITEMS = [
       ctx.beginPath(); ctx.arc(x, y, r + 4, 0, 6.29); ctx.stroke(); ctx.setLineDash([]);
       logEnd(ctx, x, y, r, true);
       sparkle(ctx, x - 20, y - 4); sparkle(ctx, x + 19, y + 6);
-      pxDraw(ctx, '+1', x + 17, y - 16, { sy: 2, bold: true, color: '#fff' });
+      inkText(ctx, '+1', x + 17, y - 9, { color: '#fff' });
     } },
   { id: 'engine', name: 'STRONGER ENGINE', desc: '+20% SPEED', key: 'SPEED', val: '+20%', price: 2400, seed: 23,
     art(ctx, w, h) {
@@ -1670,7 +1640,7 @@ const SHOP_ITEMS = [
         ctx.stroke();
       }
       ctx.beginPath(); ctx.moveTo(cx + 24 * s, wy + 4); ctx.quadraticCurveTo(cx + 36 * s, wy, cx + 40 * s, wy + 6); ctx.stroke();   // бурун
-      pxDraw(ctx, '+20%', w - 30, 6, { sy: 2, bold: true, color: '#fff' });
+      inkText(ctx, '+20%', w - 32, 12, { color: '#fff' });
     } },
   { id: 'chains', name: 'CARGO CHAINS', desc: 'NO CAPSIZE WHEN FULL', key: 'SAFE', val: 'YES', price: 1200, seed: 37,
     art(ctx, w, h) { artNight(ctx, w, h, 66, this.seed); pile(ctx, w / 2, CHAIN_ART.base, CHAIN_ART.r, 6); },
@@ -1697,7 +1667,7 @@ const SHOP_ITEMS = [
 ];
 
 // ---------- билеты магазина: тело с картинкой и корешок по линии перфорации ----------
-const TW = 124, BODY_H = 138, STUB_H = 54;
+const TW = 150, BODY_H = 148, STUB_H = 64;
 const shopRow = shopEl.querySelector('.row'), shopHead = document.getElementById('shopHead');
 let shopK = 2;
 function cutEdge(ctx, y, w, holes) {             // зубчики по краю или дырочки перфорации — вырезаем из бумаги
@@ -1712,7 +1682,7 @@ function sideNotch(ctx, y, w) {                  // полукруглые вы�
 }
 function wrap(text, max) {
   const out = []; let line = '';
-  for (const w of text.split(' ')) { const t = line ? line + ' ' + w : w; if (pxW(t) > max && line) { out.push(line); line = w; } else line = t; }
+  for (const w of text.split(' ')) { const t = line ? line + ' ' + w : w; if (inkW(t) > max && line) { out.push(line); line = w; } else line = t; }
   return out.concat(line);
 }
 function drawBody(it) {
@@ -1734,11 +1704,11 @@ function drawBody(it) {
   }
   crisp(ctx, TW, BODY_H, 200);
   if (owned) {                                   // надпись — по клеткам, без поворота: штамп чуть косой, буквы ровные
-    pxDraw(ctx, 'SOLD', TW / 2 - pxW('SOLD', true) / 2, 41, { sy: 2, bold: true, color: '#fff' });
+    inkText(ctx, 'SOLD', TW / 2, 48, { n: 18, color: '#fff', center: true });
   }
-  pxDraw(ctx, it.name, 7, 92, { sy: 2, bold: true });
-  wrap(it.desc, TW - 14).slice(0, 2).forEach((l, i) => pxDraw(ctx, l, 7, 111 + i * 9));
-  ctx.fillStyle = '#000'; for (let x = 7; x < TW - 7; x += 4) ctx.fillRect(x, 130, 2, 1);   // пунктир
+  inkText(ctx, it.name, 8, 99);
+  wrap(it.desc, TW - 16).slice(0, 2).forEach((l, i) => inkText(ctx, l, 8, 116 + i * 12));
+  ctx.fillStyle = '#000'; for (let x = 7; x < TW - 7; x += 4) ctx.fillRect(x, 140, 2, 1);   // пунктир
 }
 function drawStub(it, no) {
   const c = it.stub, ctx = c.getContext('2d'), poor = coins < it.price;
@@ -1746,12 +1716,12 @@ function drawStub(it, no) {
   ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, TW, STUB_H);
   cutEdge(ctx, 0, TW, true); sideNotch(ctx, 0, TW); cutEdge(ctx, STUB_H, TW);
   crisp(ctx, TW, STUB_H, 200);
-  const col = [8, 44, 82];
+  const col = [8, 50, 96];
   [['NO. :', String(no + 1).padStart(2, '0')], [it.key + ' :', it.val], ['PRICE :', String(it.price)]].forEach(([a, b], i) => {
-    pxDraw(ctx, a, col[i], 7); pxDraw(ctx, b, col[i], 17, { bold: true });
+    inkText(ctx, a, col[i], 11, { n: 14 }); inkText(ctx, b, col[i], 24);
   });
-  pxDraw(ctx, 'DOCK :', col[0], 29); pxDraw(ctx, 'SHOP', col[0], 39, { bold: true });
-  pxDraw(ctx, 'STATUS :', col[1], 29); pxDraw(ctx, poor ? 'NEED ' + (it.price - coins) : 'READY', col[1], 39, { bold: true });
+  inkText(ctx, 'DOCK :', col[0], 40, { n: 14 }); inkText(ctx, 'SHOP', col[0], 53);
+  inkText(ctx, 'STATUS :', col[1], 40, { n: 14 }); inkText(ctx, poor ? 'NEED ' + (it.price - coins) : 'READY', col[1], 53);
 }
 SHOP_ITEMS.forEach((it, i) => {
   it.el = document.createElement('div'); it.el.className = 'ticket';
@@ -1778,7 +1748,7 @@ function drawShop() {
     if (!it.stub.classList.contains('torn')) it.stub.classList.toggle('gone', !!upg[it.id]);
     it.el.style.cursor = upg[it.id] ? 'default' : 'pointer';
   });
-  drawTag(shopHead, String(coins), { coin: true, tail: false, k: shopK });
+  drawKey(shopHead, String(coins), { coin: true, tail: false });
 }
 function buy(i) {
   const it = SHOP_ITEMS[i];
@@ -1789,7 +1759,7 @@ function buy(i) {
   it.stub.classList.add('torn');                // корешок отрывается и падает
   it.el.style.cursor = 'default';
   SHOP_ITEMS.forEach((o, j) => { if (o !== it) drawStub(o, j); });
-  drawTag(shopHead, String(coins), { coin: true, tail: false, k: shopK });
+  drawKey(shopHead, String(coins), { coin: true, tail: false });
   setTimeout(() => { if (upg[it.id]) drawBody(it); }, 260);   // штамп — когда корешок уже оторван
 }
 shopKey.addEventListener('click', () => shopUI.near && openShop());
@@ -1825,10 +1795,10 @@ function showWallet() { wallet.t = 2.6; }
 function spawnCoin(pay) {
   const coin = document.createElement('canvas'), label = document.createElement('canvas');
   pxSize(coin, 9, 9, 3); sprite(coin.getContext('2d'), COIN, 0, 0);
-  const ctx = label.getContext('2d'), t = '+' + pay, W = pxW(t, true) + 4, H = 18;
-  pxSize(label, W, H, 2);
-  for (const [dx, dy] of [[-1, 0], [1, 0], [0, -1], [0, 1], [-1, -1], [1, 1], [-1, 1], [1, -1]]) pxDraw(ctx, t, 2 + dx, 2 + dy, { sy: 2, bold: true });   // чёрная обводка
-  pxDraw(ctx, t, 2, 2, { sy: 2, bold: true, color: '#fff' });
+  const ctx = label.getContext('2d'), t = '+' + pay, W = Math.ceil(inkW(t)) + 6, H = 24;
+  pxSize(label, W, H, 3);
+  for (const [dx, dy] of [[-1, 0], [1, 0], [0, -1], [0, 1], [-1, -1], [1, 1], [-1, 1], [1, -1]]) inkText(ctx, t, 3 + dx, 12 + dy);   // чёрная обводка
+  inkText(ctx, t, 3, 12, { color: '#fff' });
   fxEl.append(coin, label);
   coinFx.push({ coin, label, t: 0, off: rr(-14, 14) });
 }
@@ -1841,7 +1811,7 @@ function updateTags(dt) {
   toScreen(damTag, DAM_X + 1.6, 3.6, 0);
   wallet.t -= dt;
   const wOn = wallet.t > 0 && play;
-  if (wOn && wallet.shown !== coins) { wallet.shown = coins; drawTag(walletEl, String(coins), { coin: true }); }
+  if (wOn && wallet.shown !== coins) { wallet.shown = coins; drawKey(walletEl, String(coins), { coin: true }); }
   walletEl.style.opacity = wOn ? 1 : 0;
   toScreen(walletEl, boat.x, 2.1, boat.z);
   for (let i = coinFx.length - 1; i >= 0; i--) {
