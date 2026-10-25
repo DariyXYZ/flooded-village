@@ -1313,6 +1313,19 @@ function spillOne(m) {
   logs.push(l);
 }
 
+// кораблик толкает бревно: выдавливаем по нормали, передаём скорость сближения, удар не в центр — закручивает
+const SHOVE_R = .8;
+function shove(l, q, d) {
+  const k = d || 1e-4, nx = (q.x - boat.x) / k, nz = (q.z - boat.z) / k, pen = SHOVE_R - d;
+  l.x += nx * pen; l.z += nz * pen;
+  const bvx = Math.cos(boat.yaw) * boat.v, bvz = -Math.sin(boat.yaw) * boat.v;
+  const rel = (bvx - l.vx) * nx + (bvz - l.vz) * nz;
+  if (rel <= 0) return;
+  l.vx += nx * rel * 1.1; l.vz += nz * rel * 1.1;
+  const rx = q.x - l.x, rz = q.z - l.z;
+  l.w += (rz * nx - rx * nz) * rel * 1.5;
+}
+
 function updateBoat(dt) {
   const tipping = boat.tip > 0 || won || intro.on || shopUI.open, load = boat.cargo.length;
   if (!tipping) {                         // гружёный идёт тяжелее
@@ -1358,10 +1371,10 @@ function updateBoat(dt) {
   if (boat.tip <= 0 && !won && boat.g.visible) {   // подбирает и во время заставки
     for (let i = logs.length - 1; i >= 0; i--) {
       const l = logs[i];
-      if (l.noPick > 0) continue;
-      if (upg.chains && boat.cargo.length >= cap()) break;   // цепи: полная палуба — лишнее бревно остаётся в воде
       const q = ptSeg(boat, { x: l.x - l.dx * l.len / 2, z: l.z - l.dz * l.len / 2 }, { x: l.x + l.dx * l.len / 2, z: l.z + l.dz * l.len / 2 });
-      if (Math.hypot(q.x - boat.x, q.z - boat.z) > 0.75) continue;
+      const d = Math.hypot(q.x - boat.x, q.z - boat.z);
+      if (upg.chains && boat.cargo.length >= cap()) { if (d < SHOVE_R) shove(l, q, d); continue; }   // цепи: палуба полна — бревно не берём, а расталкиваем
+      if (l.noPick > 0 || d > 0.75) continue;
       l.dispose(); logs.splice(i, 1);
       const m = new THREE.Mesh(logGeo, blockMat), k = 1 / boat.g.scale.x;
       m.scale.set(l.len * k, k, k);
