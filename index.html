@@ -1619,59 +1619,59 @@ function artBoat(ctx, cx, wy, s, n) {           // кораблик сбоку �
   pile(ctx, cx + 6 * s, wy - 5 * s, 3.4 * s, n);
 }
 const sparkle = (ctx, x, y) => { ctx.fillStyle = '#fff'; ctx.fillRect(x - 2, y, 5, 1); ctx.fillRect(x, y - 2, 1, 5); };
-const DECK_ART = { base: 66, r: 10 };
-const ENG_ART = { cx: 86, wy: 58, s: 1.25 };
+const DECK_ART = { cx: 58, wy: 70, s: 2 };
+const ENG_ART = { cx: 90, wy: 56, s: 1.25 };
 const CHAIN_ART = { base: 72, r: 11 };
+// волна-штрих с завитком на конце: от x0 к x1 синусом, затем спираль (up — завиток вверх)
+function curlWave(ctx, x0, x1, y, amp, k, ph, up, r0 = 4.5) {
+  const sx = Math.sign(x1 - x0), f = t => y + Math.sin(t * k + ph) * amp * (.4 + t * .6);
+  ctx.beginPath();
+  for (let i = 0; i <= 40; i++) { const t = i / 40, x = x0 + (x1 - x0) * t; i ? ctx.lineTo(x, f(t)) : ctx.moveTo(x, f(t)); }
+  const ey = f(1), cy = ey + (up ? -r0 : r0), a0 = up ? Math.PI / 2 : -Math.PI / 2, dir = (up ? 1 : -1) * (sx < 0 ? 1 : -1);
+  for (let i = 1; i <= 24; i++) {
+    const a = a0 + dir * i / 24 * 5.2, r = r0 * (1 - i / 24 * .7);
+    ctx.lineTo(x1 + Math.cos(a) * r, cy + Math.sin(a) * r);
+  }
+  ctx.stroke();
+}
 const SHOP_ITEMS = [
   { id: 'deck', name: 'BIGGER DECK', desc: '+1 LOG ON BOARD', key: 'LOAD', val: '+1', price: 1500, seed: 11,
-    art(ctx, w, h) {                             // палуба крупно: пять брёвен в полутоне
-      artNight(ctx, w, h, 62, this.seed);
-      const { base, r } = DECK_ART, g = ctx.createLinearGradient(0, base, 0, base + 9);
-      g.addColorStop(0, '#8a8a8a'); g.addColorStop(1, '#2a2a2a');
-      ctx.fillStyle = g; ctx.strokeStyle = '#000'; ctx.lineWidth = 1;
-      ctx.beginPath(); ctx.moveTo(8, base); ctx.lineTo(w - 4, base); ctx.lineTo(w - 12, base + 9); ctx.lineTo(14, base + 9); ctx.closePath(); ctx.fill(); ctx.stroke();
-      pile(ctx, w / 2, base, r, 5);
-    },
-    hi(ctx, w) {                                 // шестое бревно — белое, сверху штабеля, в пунктирном ореоле, и «+1»
-      const { base, r } = DECK_ART, [x, y] = pileAt(w / 2, base, r, 5);
+    art(ctx, w, h) { artNight(ctx, w, h, 60, this.seed); const { cx, wy, s } = DECK_ART; artBoat(ctx, cx, wy, s, 5); },
+    hi(ctx) {                                    // наш кораблик со штабелем, шестое бревно — белое, сверху, в пунктирном ореоле, и «+1»
+      const { cx, wy, s } = DECK_ART, r = 3.4 * s, [x, y] = pileAt(cx + 6 * s, wy - 5 * s, r, 5);
       ctx.strokeStyle = '#fff'; ctx.lineWidth = 1; ctx.setLineDash([2, 2]);
-      ctx.beginPath(); ctx.arc(x, y, r + 4, 0, 6.29); ctx.stroke(); ctx.setLineDash([]);
+      ctx.beginPath(); ctx.arc(x, y, r + 3.5, 0, 6.29); ctx.stroke(); ctx.setLineDash([]);
       logEnd(ctx, x, y, r, true);
-      sparkle(ctx, x - 20, y - 4); sparkle(ctx, x + 19, y + 6);
-      inkText(ctx, '+1', x + 17, y - 9, { color: '#fff' });
+      sparkle(ctx, x - 16, y - 2); sparkle(ctx, x + 14, y + 9);
+      inkText(ctx, '+1', x + r + 6, y - 7, { color: '#fff' });
     } },
   { id: 'engine', name: 'STRONGER ENGINE', desc: '+20% SPEED', key: 'SPEED', val: '+20%', price: 2400, seed: 23,
     art(ctx, w, h) {
-      artNight(ctx, w, h, 54, this.seed);
+      artNight(ctx, w, h, 50, this.seed);
       ctx.fillStyle = '#777'; ctx.beginPath(); ctx.arc(20, 16, 7, 0, 6.29); ctx.fill();   // месяц
       ctx.fillStyle = '#000'; ctx.beginPath(); ctx.arc(24, 13, 6, 0, 6.29); ctx.fill();
       const { cx, wy, s } = ENG_ART; artBoat(ctx, cx, wy, s, 2);
     },
-    hi(ctx, w) {                                 // скорость: белые полосы за кормой, плавные волны и завиток у носа
+    hi(ctx, w) {                                 // скорость: волны с завитками за кормой и бурун у носа
       const { cx, wy, s } = ENG_ART, stern = cx - 22 * s;
-      ctx.fillStyle = '#fff';
-      [[-20, 30], [-14, 44], [-8, 36], [-2, 24]].forEach(([dy, l], i) => ctx.fillRect(stern - 4 - l - (i % 2) * 6, wy + dy, l, 2));
-      ctx.strokeStyle = '#fff'; ctx.lineWidth = 2; ctx.lineCap = 'round';
-      const wave = pts => {                       // плавная волна: точки — цепочка кубических кривых
-        ctx.beginPath(); ctx.moveTo(...pts[0]);
-        for (let i = 1; i < pts.length; i += 3) ctx.bezierCurveTo(...pts[i], ...pts[i + 1], ...pts[i + 2]);
-        ctx.stroke();
-      };
-      wave([[stern - 40, wy - 6], [stern - 34, wy - 12], [stern - 22, wy - 9], [stern - 10, wy - 2]]);   // верхний ус — горбик
-      wave([[stern - 40, wy + 5], [stern - 32, wy - 1], [stern - 22, wy + 8], [stern - 10, wy + 8],
-            [stern, wy + 8], [stern + 8, wy + 10], [stern + 18, wy + 9]]);                              // нижний — длинная S
-      wave([[stern + 4, wy + 10], [cx - 10, wy + 8], [cx + 12 * s, wy + 9], [cx + 26 * s, wy + 5],
-            [cx + 32 * s, wy + 2], [cx + 31 * s, wy - 4], [cx + 26 * s, wy - 1]]);                      // ватерлиния и завиток у носа
+      ctx.strokeStyle = '#fff'; ctx.lineWidth = 2; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+      curlWave(ctx, stern - 3, 16, wy - 7, 2, 9, 0, true);
+      curlWave(ctx, stern - 1, 24, wy + 3, 2.5, 7, 1.5, false);
+      curlWave(ctx, stern - 8, 44, wy + 12, 1.5, 6, 3, true, 3.5);
+      curlWave(ctx, stern + 2, cx + 27 * s, wy + 7, 1, 8, .5, true, 4);   // ватерлиния, завиток у носа
       inkText(ctx, '+20%', w - 32, 12, { color: '#fff' });
     } },
   { id: 'chains', name: 'CARGO CHAINS', desc: 'NO CAPSIZE WHEN FULL', key: 'SAFE', val: 'YES', price: 1200, seed: 37,
     art(ctx, w, h) { artNight(ctx, w, h, 66, this.seed); pile(ctx, w / 2, CHAIN_ART.base, CHAIN_ART.r, 6); },
-    hi(ctx, w) {                                 // цепи крест-накрест поверх штабеля и замок в центре
-      const cx = w / 2, { base } = CHAIN_ART;
+    hi(ctx, w) {                                 // цепи крест-накрест — только по брёвнам, и замок в центре
+      const cx = w / 2, { base, r } = CHAIN_ART, logs = [0, 1, 2, 3, 4, 5].map(k => pileAt(cx, base, r, k));
+      const onLog = (x, y) => logs.some(([lx, ly]) => Math.hypot(x - lx, y - ly) < r + 1);
       const chain = (x0, y0, x1, y1) => {
         const L = Math.hypot(x1 - x0, y1 - y0), a = Math.atan2(y1 - y0, x1 - x0);
         for (let d = 0, n = 0; d < L; d += 6.5, n++) {
-          ctx.save(); ctx.translate(x0 + Math.cos(a) * d, y0 + Math.sin(a) * d); ctx.rotate(a);
+          const x = x0 + Math.cos(a) * d, y = y0 + Math.sin(a) * d;
+          if (!onLog(x, y)) continue;
+          ctx.save(); ctx.translate(x, y); ctx.rotate(a);
           const link = () => { ctx.beginPath(); n % 2 ? (ctx.moveTo(-3.5, 0), ctx.lineTo(3.5, 0)) : ctx.ellipse(0, 0, 4.5, 2.8, 0, 0, 6.29); ctx.stroke(); };
           ctx.strokeStyle = '#000'; ctx.lineWidth = 4.5; link();
           ctx.strokeStyle = '#fff'; ctx.lineWidth = 2; link();
@@ -1730,7 +1730,6 @@ function drawBody(it) {
   }
   inkText(ctx, it.name, 8, 99);
   wrap(it.desc, TW - 16).slice(0, 2).forEach((l, i) => inkText(ctx, l, 8, 116 + i * 12));
-  ctx.fillStyle = '#000'; for (let x = 7; x < TW - 7; x += 4) ctx.fillRect(x, 140, 2, 1);   // пунктир
 }
 function drawStub(it, no) {
   const c = it.stub, ctx = c.getContext('2d'), poor = coins < it.price;
