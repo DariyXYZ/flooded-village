@@ -1074,17 +1074,22 @@ function plantShore() {
     if (pudU.slice(0, n).some(p => Math.hypot(p.x - x, p.y - z) < p.z + rx + 1)) continue;
     pudU[n++].set(x, z, rx, rz);
   }
-  // трава ковром по всему берегу; чанки 10×10 — рисуются только те, что попали в кадр
-  const geos = {
-    short: [tuftGeo(7, .3, .6, .13), tuftGeo(6, .25, .5, .15)],
-    tall:  [tuftGeo(12, 1.4, 2.4, .18), tuftGeo(9, 1.6, 2.8, .15)],
-    reed:  [tuftGeo(6, 2.2, 3.4, .1, true)],
+  // трава ковром по всему берегу; чанки 14×14 — рисуются только те, что попали в кадр
+  const geos = {                                 // разные пучки: редкие и густые, низкие и высокие; одиночные травинки — между ними
+    short: [tuftGeo(5, .2, .45, .09), tuftGeo(8, .3, .7, .16), tuftGeo(6, .25, .55, .2)],
+    tall:  [tuftGeo(13, 1.3, 2.4, .2), tuftGeo(8, 1.7, 3, .12), tuftGeo(10, 1.1, 2, .22)],
+    reed:  [tuftGeo(6, 2.2, 3.4, .1, true), tuftGeo(4, 2.6, 3.8, .08, true)],
+    blade: [tuftGeo(2, .5, 1.6, .05), tuftGeo(3, .8, 2.4, .07)],
   };
-  const m = new THREE.Matrix4(), q = new THREE.Quaternion(), up = new THREE.Vector3(0, 1, 0), v = new THREE.Vector3(), sc = new THREE.Vector3();
-  const place = (list, x, z, s) => {
-    q.setFromAxisAngle(up, R() * 6.28);
-    list.push(m.compose(v.set(x, 0, z), q, sc.set(s, s * rr(.8, 1.2), s)).clone());
+  const m = new THREE.Matrix4(), q = new THREE.Quaternion(), e = new THREE.Euler(), v = new THREE.Vector3(), sc = new THREE.Vector3();
+  // пучок: свой поворот, наклон в сторону la (ветер + разброс), неравный масштаб по осям
+  const place = (list, x, z, s, sy = s * rr(.8, 1.2), lean = rr(0, .12), la = R() * 6.28) => {
+    q.setFromEuler(e.set(Math.cos(la) * lean, R() * 6.28, Math.sin(la) * lean, 'XZY'));
+    list.push(m.compose(v.set(x, 0, z), q, sc.set(s * rr(.8, 1.25), sy, s * rr(.8, 1.25))).clone());
   };
+  // многослойный шум и искривление координат — поляны неправильной формы, без повторяющихся «шапок»
+  const fbm = (x, z) => noise2(x, z) * .5 + noise2(x * 2.1 + 5.2, z * 2.1 - 1.3) * .27 + noise2(x * 4.3 - 7.1, z * 4.3 + 3.7) * .15 + noise2(x * 8.7 + 2, z * 8.7 - 9) * .08;
+  const warp = (x, z) => [x + (noise2(x * .04 + 11, z * .04) - .5) * 16, z + (noise2(x * .04, z * .04 - 7) - .5) * 16];
   const pudDist = (x, z) => {
     let d = 1e3;
     for (const p of pudU) d = Math.min(d, (Math.hypot((x - p.x) / p.z, (z - p.y) / p.w) - 1) * Math.min(p.z, p.w));
@@ -1100,7 +1105,7 @@ function plantShore() {
     bushSpots.push({ x, z, sc0, r: sc0 * 1.7 });
   }
   const onRock = (x, z) => bushSpots.some(b => (x - b.x) ** 2 + (z - b.z) ** 2 < b.r * b.r);
-  const CH = 10, DENS = 3.2;
+  const CH = 14, DENS = 9, WIND = .7;            // WIND — куда в среднем клонится трава
   for (let cx = -130; cx < 75; cx += CH) for (let cz = -64; cz < 64; cz += CH) {
     const lists = new Map();
     for (let i = 0; i < CH * CH * DENS; i++) {
@@ -1108,20 +1113,22 @@ function plantShore() {
       if (sd < .25 || sd > 22) continue;
       const pd = pudDist(x, z);
       if (pd < .05 || onRock(x, z)) continue;
-      const meadow = noise2(x * .11, z * .11);
-      const dens = .08 + .92 * sstep(.3, .72, noise2(x * .07 + 3, z * .07 - 5)) * (.55 + .45 * noise2(x * .35, z * .35));
-      if (R() > dens) continue;                              // где-то густые заросли, где-то редкие пучки
+      const [wx, wz] = warp(x, z);
+      const field = fbm(wx * .06, wz * .06);                 // крупно: заросли и проплешины
+      const clump = fbm(x * .55 + 31, z * .55 - 17);         // мелко: кулиги внутри зарослей
+      const dens = .04 + sstep(.3, .68, field) * (.2 + .8 * sstep(.3, .72, clump));
+      if (R() > dens) continue;
+      const tallness = sstep(.42, .68, fbm(wx * .08 + 1, wz * .08 + 6));
+      const hf = .6 + 1.1 * sstep(.25, .75, fbm(wx * .13 - 4, wz * .13 + 8));   // высота плавно гуляет по полю
       const wet = sd < 1.6 || pd < .9;                      // у воды и у луж — тростник и высокая
-      const g = wet && R() < .55 ? pick(geos.reed)
-              : wet || sd < 3 || pd < 2 || (meadow > .62 && R() < .5) ? pick(geos.tall)
-              : pick(geos.short);
+      const r = R();
+      const kind = wet ? (r < .55 ? 'reed' : 'tall')
+                 : r < .14 ? 'blade'
+                 : r < .14 + tallness * .75 || (sd < 3 || pd < 2) && r < .6 ? 'tall' : 'short';
+      const g = pick(geos[kind]);
       if (!lists.has(g)) lists.set(g, []);
-      const n = 2 + Math.floor(R() * 6 * dens), cr = rr(.15, .45);   // куртинка: несколько пучков тесно вместе
-      for (let k = 0; k < n; k++) {
-        const a = R() * 6.28, d = cr * Math.sqrt(R()), px = x + Math.cos(a) * d, pz = z + Math.sin(a) * d;
-        if (onRock(px, pz) || sdWater(px, pz) < .25 || pudDist(px, pz) < .05) continue;
-        place(lists.get(g), px, pz, rr(.75, 1.25));
-      }
+      const s = rr(.7, 1.2), la = WIND + (noise2(x * .2, z * .2) - .5) * 2.4 + rr(-.4, .4);
+      place(lists.get(g), x, z, s, s * hf * rr(.85, 1.15), rr(.04, kind === 'short' ? .18 : .3), la);
     }
     for (const [g, list] of lists) {
       const im = new THREE.InstancedMesh(g, grassMat, list.length);

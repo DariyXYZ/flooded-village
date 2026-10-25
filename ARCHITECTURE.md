@@ -172,7 +172,7 @@ Each house has `refl` (EdgesGeometry line segments, mirrored `scale.y = −1`) a
 - Near the dam the current is stronger than the boat — that is the "soft wall". Unloading zone: `boat.x < DAM_WALL + 4.5`.
 
 ### Shore (`plantShore`, once at load)
-- Puddles (`pudU`, 64) → boulder spots (no grass on them, ring of tall grass around) → grass clumps in 10×10 InstancedMesh chunks (view-culled) → sticks/pebbles.
+- Puddles (`pudU`, 64) → boulder spots (no grass on them, ring of tall grass around) → grass tufts in 14×14 InstancedMesh chunks (view-culled), placed by domain-warped fbm (density, height, tall/short), each with its own lean and non-uniform scale → sticks/pebbles.
 - **Not re-run on R** (shore stays the same across games; only city, logs, rocks, dam stack, lakebed are rebuilt).
 
 ### Intro & speech bubble
