@@ -137,8 +137,7 @@ const GLSL_NOISE = `
 
 // ---------- рендер ----------
 const renderer = new THREE.WebGLRenderer({ antialias: false });
-const DPR = Math.min(devicePixelRatio || 1, 2);
-renderer.setPixelRatio(DPR);
+renderer.setPixelRatio(1);                    // размер буфера ставим сами, в физических пикселях — см. resize()
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.BasicShadowMap;   // жёсткие пиксельные края
 document.body.appendChild(renderer.domElement);
@@ -463,17 +462,26 @@ const postScene = new THREE.Scene();
 const postCam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
 postScene.add(new THREE.Mesh(new THREE.PlaneGeometry(2, 2), postMat));
 
+// буфер = ровно физические пиксели холста на экране. При дробном масштабе (125 %, 150 %) w·dpr нецелое:
+// если буфер хоть на пиксель меньше, браузер растягивает его и посередине дублируется столбец точек растра
+let devW = 0, devH = 0;
 function resize() {
-  const w = innerWidth, h = innerHeight;
-  renderer.setSize(w, h);
+  const w = innerWidth, h = innerHeight, dpr = devicePixelRatio || 1;
+  const exact = devW && dpr <= 2;              // выше 2 — экономим: буфер как при dpr 2
+  const rw = exact ? devW : Math.round(w * Math.min(dpr, 2)), rh = exact ? devH : Math.round(h * Math.min(dpr, 2));
+  renderer.setSize(rw, rh, false);
+  renderer.domElement.style.width = w + 'px'; renderer.domElement.style.height = h + 'px';
   camera.aspect = w / h; camera.updateProjectionMatrix();
-  const db = renderer.getDrawingBufferSize(new THREE.Vector2()), rw = db.x, rh = db.y;   // ровно размер холста
   rt.setSize(rw, rh);
   postMat.uniforms.uTexel.value.set(1 / rw, 1 / rh);
   postMat.uniforms.uCell.value = pixel;
 }
 addEventListener('resize', resize);
 resize();
+new ResizeObserver(([e]) => {                  // точный размер в физических пикселях знает только браузер
+  const b = e.devicePixelContentBoxSize?.[0];
+  if (b && (b.inlineSize !== devW || b.blockSize !== devH)) { devW = b.inlineSize; devH = b.blockSize; resize(); }
+}).observe(renderer.domElement);
 
 // ---------- геометрия «домика» ----------
 const geoCache = new Map();
