@@ -1228,7 +1228,7 @@ function pillow(ctx, cx, cy, a, b, rnd, shake = 1) {   // shake — сила д�
   ctx.beginPath();
   for (let i = 0; i <= 240; i++) {
     const t = i / 240 * Math.PI * 2, c = Math.cos(t), s = Math.sin(t);
-    const wob = (Math.sin(t * 2 + p1) * k1 + Math.sin(t * 3 + p2) * k2) * 2.5;     // крупная кривизна — слабая, в пикселях
+    const wob = (Math.sin(t * 2 + p1) * k1 + Math.sin(t * 3 + p2) * k2 + k1 + k2) * 1.25;   // крупная кривизна — только наружу, без ямок на плоских боках
     const jit = Math.sin(t * f3 + p3) * j3 + Math.sin(t * f4 + p4) * j4;          // мелкое дрожание, в пикселях
     const d = (wob + jit) * shake;                                  // смещение наружу — одинаковое для длинных и коротких баблов
     const x = cx + Math.sign(c) * Math.pow(Math.abs(c), 2 / n) * a + c * d;
